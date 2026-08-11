@@ -58,7 +58,7 @@ import org.koin.java.KoinJavaComponent.inject
 import org.koin.mp.KoinPlatform.getKoin
 import simpmusic.composeapp.generated.resources.Res
 import simpmusic.composeapp.generated.resources.app_name
-import simpmusic.composeapp.generated.resources.circle_app_icon
+import simpmusic.composeapp.generated.resources.app_icon
 import simpmusic.composeapp.generated.resources.close_miniplayer
 import simpmusic.composeapp.generated.resources.explicit_content_blocked
 import simpmusic.composeapp.generated.resources.open_app
@@ -218,9 +218,6 @@ fun runDesktopApp(args: Array<String> = emptyArray()) {
     WindowsProtocolRegistrar.register()
 
     val sharedViewModel = getKoin().get<SharedViewModel>()
-    if (sharedViewModel.shouldCheckForUpdate()) {
-        sharedViewModel.checkForUpdate()
-    }
 
     // Connect deep link handler to SharedViewModel
     DesktopDeepLinkHandler.listener = { intent ->
@@ -257,7 +254,7 @@ fun runDesktopApp(args: Array<String> = emptyArray()) {
         // Tray menus are narrow, so long titles would stretch the popup.
         val trayLabel: (String) -> String = { if (it.length > 40) it.take(39).trimEnd() + "…" else it }
         Tray(
-            icon = painterResource(Res.drawable.circle_app_icon),
+            icon = painterResource(Res.drawable.app_icon),
             tooltip =
                 when {
                     hasTrack && nowPlayingArtist.isNotBlank() -> "$nowPlayingTitle — $nowPlayingArtist"
@@ -358,7 +355,7 @@ fun runDesktopApp(args: Array<String> = emptyArray()) {
                 isVisible = false
             },
             title = stringResource(Res.string.app_name),
-            icon = painterResource(Res.drawable.circle_app_icon),
+            icon = painterResource(Res.drawable.app_icon),
             undecorated = !isVM,
             transparent = !isVM,
             state = windowState,
