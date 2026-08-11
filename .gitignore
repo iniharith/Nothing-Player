@@ -19,7 +19,9 @@ crowdin.yml
 .kotlin/
 .idea
 /simpmusic.jks
+/keystore.properties
 /ffmpeg-kit/build/
+/releases/
 
 #dev files
 ign.md

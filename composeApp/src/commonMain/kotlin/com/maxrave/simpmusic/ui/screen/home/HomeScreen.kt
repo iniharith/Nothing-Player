@@ -600,7 +600,7 @@ fun HomeScreen(
                             }
                         }
                         if (homeListState == ListState.PAGINATION_EXHAUST) {
-                            itemsIndexed(newRelease, key = { index, _ -> index }) { _, item ->
+                            itemsIndexed(newRelease, key = { index, _ -> "new_release_$index" }) { _, item ->
                                 AnimatedVisibility(
                                     visible = newRelease.isNotEmpty(),
                                 ) {
