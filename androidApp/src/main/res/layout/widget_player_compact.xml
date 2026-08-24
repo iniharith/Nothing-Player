@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Default 4x2 player: reference media layout adapted to the Nothing spinning disc. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_player_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_background"
+    android:padding="10dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="start|center_vertical"
+        android:layout_marginEnd="64dp"
+        android:layout_marginBottom="24dp"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/widget_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:fontFamily="monospace"
+            android:singleLine="true"
+            android:text="Nothing Player"
+            android:textColor="#FFFFFFFF"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/widget_artist"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="1dp"
+            android:ellipsize="end"
+            android:fontFamily="monospace"
+            android:singleLine="true"
+            android:text="Open music player first"
+            android:textColor="#B3FFFFFF"
+            android:textSize="9sp" />
+
+        <TextView
+            android:id="@+id/widget_lyric_line1"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:ellipsize="end"
+            android:fontFamily="monospace"
+            android:singleLine="true"
+            android:text="Play music to see lyrics"
+            android:textColor="#FFFFFFFF"
+            android:textSize="10sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/widget_player_disc_button"
+        android:layout_width="52dp"
+        android:layout_height="52dp"
+        android:layout_gravity="end|center_vertical"
+        android:layout_marginBottom="22dp"
+        android:contentDescription="Play or pause">
+
+        <ImageView
+            android:id="@+id/widget_player_disc"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="Spinning play or pause disc"
+            android:scaleType="fitXY" />
+
+        <ImageView
+            android:id="@+id/widget_player_play_pause"
+            android:layout_width="26dp"
+            android:layout_height="26dp"
+            android:layout_gravity="center"
+            android:background="@drawable/widget_button_primary"
+            android:contentDescription="Play or pause"
+            android:padding="6dp"
+            android:scaleType="centerInside"
+            android:src="@drawable/ic_widget_play" />
+    </FrameLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="28dp"
+        android:layout_gravity="bottom"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <ImageButton
+            android:id="@+id/widget_player_prev"
+            android:layout_width="26dp"
+            android:layout_height="26dp"
+            android:background="@drawable/widget_button_background"
+            android:contentDescription="Previous"
+            android:padding="5dp"
+            android:scaleType="centerInside"
+            android:src="@drawable/ic_widget_prev" />
+
+        <ProgressBar
+            android:id="@+id/widget_player_progress"
+            style="@android:style/Widget.ProgressBar.Horizontal"
+            android:layout_width="0dp"
+            android:layout_height="3dp"
+            android:layout_marginStart="9dp"
+            android:layout_marginEnd="9dp"
+            android:layout_weight="1"
+            android:indeterminate="false"
+            android:max="10000"
+            android:progress="0"
+            android:progressDrawable="@drawable/widget_progress" />
+
+        <ImageButton
+            android:id="@+id/widget_player_next"
+            android:layout_width="26dp"
+            android:layout_height="26dp"
+            android:background="@drawable/widget_button_background"
+            android:contentDescription="Next"
+            android:padding="5dp"
+            android:scaleType="centerInside"
+            android:src="@drawable/ic_widget_next" />
+    </LinearLayout>
+
+</FrameLayout>
