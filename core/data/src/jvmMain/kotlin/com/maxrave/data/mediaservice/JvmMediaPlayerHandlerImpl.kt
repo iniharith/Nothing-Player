@@ -93,9 +93,9 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import org.koin.mp.KoinPlatform.getKoin
-import org.nothingplayer.nowplayingcenter.NPYC
-import org.nothingplayer.nowplayingcenter.domain.NowPlayingListener
-import org.nothingplayer.nowplayingcenter.domain.Platform
+import org.simpmusic.nowplayingcenter.NPYC
+import org.simpmusic.nowplayingcenter.domain.NowPlayingListener
+import org.simpmusic.nowplayingcenter.domain.Platform
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.pow
 
