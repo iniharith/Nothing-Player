@@ -1034,7 +1034,10 @@ fun MoodMomentAndGenre(
                 state = gridState,
                 flingBehavior = flingBehavior,
             ) {
-                items(section.items, key = { it }) { item ->
+                // Key by the mood's unique params string. Using the MoodItem object itself as a
+                // LazyGrid key crashed on Android: item keys must be Bundle-storable primitives
+                // ("Type of the key MoodItem(...) is not supported").
+                items(section.items, key = { it.params }) { item ->
                     MoodMomentAndGenreHomeItem(
                         title = item.title,
                         stripeColor = item.stripeColor,
