@@ -17,6 +17,24 @@ permissions:
   contents: write
 
 jobs:
+  check-desktop-signing:
+    name: Check desktop signing configuration
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.conveyor-key.outputs.enabled }}
+    steps:
+      - name: Check Conveyor signing key
+        id: conveyor-key
+        env:
+          CONVEYOR_SIGNING_KEY: ${{ secrets.CONVEYOR_SIGNING_KEY }}
+        run: |
+          if [ -n "$CONVEYOR_SIGNING_KEY" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping desktop packages because CONVEYOR_SIGNING_KEY is not configured."
+          fi
+
   build-full-release:
     name: Build full release version
     runs-on: ubuntu-latest
@@ -119,6 +137,8 @@ jobs:
 
   build-desktop-packages:
     name: Build desktop packages (AppImage + Mac zip + Windows msix)
+    needs: check-desktop-signing
+    if: needs.check-desktop-signing.outputs.enabled == 'true'
     runs-on: ubuntu-22.04
     defaults:
       run:
