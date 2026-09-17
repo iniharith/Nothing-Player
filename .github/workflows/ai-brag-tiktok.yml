@@ -32,10 +32,10 @@ jobs:
           Voice: off
 
           ## Storyboard
-          0.0–3.2s — Hook: NOTHING PLAYER / Your music player shouldn't feel boring.
+          0.0–3.2s — Hook: NOTHING PLAYER / Your music player should not feel boring.
           3.2–6.4s — Reveal: YouTube Music. Reimagined.
           6.4–9.6s — Discovery: Search. Discover. Play.
-          9.6–12.8s — Playback: Synced lyrics / Offline • Background • Crossfade
+          9.6–12.8s — Playback: Synced lyrics / Offline + Background + Crossfade
           12.8–16.0s — Experience: Liquid Glass UI / Themes that feel yours.
           16.0–20.0s — Outro: Open source. Built for listeners. / github.com/iniharith/Nothing-Player
           EOF
@@ -56,26 +56,14 @@ jobs:
           render_scene() {
             IMG="$1"; OUT="$2"; DUR="$3"; TITLE="$4"; SUB="$5"
             ffmpeg -y -loop 1 -framerate 30 -t "$DUR" -i "$IMG" \
-              -filter_complex "\
-              [0:v]split=2[bg0][fg0];\
-              [bg0]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=45,eq=brightness=-0.25:saturation=0.7[bg];\
-              [fg0]scale=820:1500:force_original_aspect_ratio=decrease[fg];\
-              [bg][fg]overlay=(W-w)/2:(H-h)/2+65:format=auto,\
-              drawbox=x=0:y=0:w=1080:h=300:color=black@0.72:t=fill,\
-              drawbox=x=0:y=1680:w=1080:h=240:color=black@0.72:t=fill,\
-              drawbox=x=64:y=82:w=18:h=118:color=0xE3262E@1:t=fill,\
-              drawtext=fontfile=${FONT}:text='${TITLE}':fontcolor=white:fontsize=72:x=110:y=78,\
-              drawtext=fontfile=${REG}:text='${SUB}':fontcolor=0xE8E8E8:fontsize=36:x=110:y=175,\
-              drawtext=fontfile=${REG}:text='NOTHING PLAYER':fontcolor=white@0.9:fontsize=30:x=70:y=1780,\
-              drawtext=fontfile=${REG}:text='OPEN SOURCE MUSIC CLIENT':fontcolor=0xE3262E:fontsize=26:x=70:y=1830,\
-              fps=30,format=yuv420p[v]" \
+              -filter_complex "[0:v]split=2[bg0][fg0];[bg0]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,gblur=sigma=45,eq=brightness=-0.25:saturation=0.7[bg];[fg0]scale=820:1500:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2+65[base];[base]drawbox=x=0:y=0:w=1080:h=300:color=black@0.72:t=fill,drawbox=x=0:y=1680:w=1080:h=240:color=black@0.72:t=fill,drawbox=x=64:y=82:w=18:h=118:color=0xE3262E@1:t=fill,drawtext=fontfile=${FONT}:text='${TITLE}':fontcolor=white:fontsize=72:x=110:y=78,drawtext=fontfile=${REG}:text='${SUB}':fontcolor=0xE8E8E8:fontsize=36:x=110:y=175,drawtext=fontfile=${REG}:text='NOTHING PLAYER':fontcolor=white@0.9:fontsize=30:x=70:y=1780,drawtext=fontfile=${REG}:text='OPEN SOURCE MUSIC CLIENT':fontcolor=0xE3262E:fontsize=26:x=70:y=1830,fps=30,format=yuv420p[v]" \
               -map '[v]' -an -c:v libx264 -preset medium -crf 18 -movflags +faststart "$OUT"
           }
 
-          render_scene asset/screenshot/01.png brag-output/segments/01.mp4 3.2 'NOTHING PLAYER' "Your music player shouldn't feel boring."
+          render_scene asset/screenshot/01.png brag-output/segments/01.mp4 3.2 'NOTHING PLAYER' 'Your music player should not feel boring.'
           render_scene asset/screenshot/02.png brag-output/segments/02.mp4 3.2 'YOUTUBE MUSIC.' 'REIMAGINED.'
           render_scene asset/screenshot/03.png brag-output/segments/03.mp4 3.2 'SEARCH. DISCOVER.' 'PLAY.'
-          render_scene asset/screenshot/04.png brag-output/segments/04.mp4 3.2 'SYNCED LYRICS' 'Offline • Background • Crossfade'
+          render_scene asset/screenshot/04.png brag-output/segments/04.mp4 3.2 'SYNCED LYRICS' 'Offline + Background + Crossfade'
           render_scene asset/screenshot/05.png brag-output/segments/05.mp4 3.2 'LIQUID GLASS UI' 'Themes that feel yours.'
           render_scene asset/screenshot/06.png brag-output/segments/06.mp4 4.0 'OPEN SOURCE.' 'Built for listeners.'
 
@@ -103,7 +91,7 @@ jobs:
       - name: Write TikTok share copy
         run: |
           cat > brag-output/share-copy.txt <<'EOF'
-          Your music player shouldn't feel boring. 🎧
+          Your music player should not feel boring. 🎧
 
           Nothing Player is an open-source YouTube Music client built with Kotlin + Compose Multiplatform, with synced lyrics, offline/background playback, crossfade, themes and more.
 
