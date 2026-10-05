@@ -19,25 +19,29 @@ import com.maxrave.kotlinytmusicscraper.YouTube
 import com.maxrave.kotlinytmusicscraper.models.MediaType
 import com.maxrave.kotlinytmusicscraper.models.response.PlayerResponse
 import com.maxrave.logger.Logger
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 internal class StreamRepositoryImpl(
     private val localDataSource: LocalDataSource,
     private val youTube: YouTube,
+    private val coroutineScope: CoroutineScope,
 ) : StreamRepository {
     override suspend fun insertNewFormat(newFormat: NewFormatEntity) =
         withContext(Dispatchers.IO) {
             localDataSource.insertNewFormat(newFormat)
         }
 
-    override fun getNewFormat(videoId: String): Flow<NewFormatEntity?> = flow { emit(localDataSource.getNewFormat(videoId)) }.flowOn(Dispatchers.Main)
+    override fun getNewFormat(videoId: String): Flow<NewFormatEntity?> = flow { emit(localDataSource.getNewFormat(videoId)) }.flowOn(Dispatchers.IO)
 
     override suspend fun getFormatFlow(videoId: String) = localDataSource.getNewFormatAsFlow(videoId)
 
@@ -216,7 +220,7 @@ internal class StreamRepositoryImpl(
                                 ),
                             cpn = data.first,
                             expiredTime = now().plusSeconds(response.streamingData?.expiresInSeconds?.toLong() ?: 0L),
-                            audioUrl = if (muxed) response.streamingData?.hlsManifestUrl else format?.url,
+                            audioUrl = if (muxed) response.streamingData?.hlsManifestUrl else audioFormat?.url,
                             videoUrl = if (muxed) response.streamingData?.hlsManifestUrl else videoFormat?.url,
                             // Tidal BPM/key are filled in AFTER the stream URL below is emitted —
                             // never block playback start on an extra metadata round trip.
@@ -225,6 +229,22 @@ internal class StreamRepositoryImpl(
                             keyScale = null,
                         )
                     insertNewFormat(newFormat)
+                    // Optional AutoMix lookup must not extend getStream's completion time.
+                    // In particular, lastOrNull callers wait for completion after the URL.
+                    // This finite child of the shared service scope can also be cancelled.
+                    if (!isVideo && durationSecond != null && data.third == MediaType.Song) {
+                        coroutineScope.launch(Dispatchers.IO) {
+                            try {
+                                withTimeoutOrNull(10_000L) {
+                                    updateAutoMixMetadata(newFormat, response, durationSecond)
+                                }
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                Logger.e("Stream", "Tidal metadata error: ${e.message}", e)
+                            }
+                        }
+                    }
                     if (data.first != null) {
                         emit(
                             if (muxed) {
@@ -254,49 +274,40 @@ internal class StreamRepositoryImpl(
                             },
                         )
                     }
-                    // The player already has the URL, so this runs strictly after playback is
-                    // unblocked. NonCancellable keeps the write alive even when the collector
-                    // cancels right after receiving the first value (e.g. .first()).
-                    withContext(NonCancellable) {
-                        // AutoMix metadata from Tidal official API (extra info only)
-                        if (!isVideo && durationSecond != null && data.third == MediaType.Song) {
-                            val title = response.videoDetails?.title ?: ""
-                            val author = response.videoDetails?.author ?: ""
-                            val q =
-                                "$title $author"
-                                    .replace(
-                                        Regex("\\((feat\\.|ft.|cùng với|con|mukana|com|avec|合作音乐人: ) "),
-                                        " ",
-                                    ).replace(
-                                        Regex("( và | & | и | e | und |, |和| dan)"),
-                                        " ",
-                                    ).replace("  ", " ")
-                                    .replace(Regex("([()])"), "")
-                                    .replace(".", " ")
-                                    .replace("  ", " ")
-                            Logger.d("Stream", "Search Tidal metadata for: $q")
-                            youTube
-                                .searchTidalMetadata(q, durationSecond)
-                                .onSuccess { metadata ->
-                                    Logger.w("Stream", "Tidal metadata: $metadata")
-                                    localDataSource.updateNewFormat(
-                                        newFormat.copy(
-                                            bpm = metadata.bpm,
-                                            musicKey = metadata.musicKey,
-                                            keyScale = metadata.keyScale,
-                                        ),
-                                    )
-                                }.onFailure {
-                                    Logger.e("Stream", "Tidal metadata error: ${it.message}", it)
-                                }
-                        }
-                    }
                 }.onFailure {
+                    if (it is CancellationException) throw it
                     it.printStackTrace()
                     Logger.e("Stream", "Error: ${it.message}")
                     emit(null)
                 }
         }.flowOn(Dispatchers.IO)
+
+    private suspend fun updateAutoMixMetadata(
+        newFormat: NewFormatEntity,
+        response: PlayerResponse,
+        durationSecond: Int,
+    ) {
+        val title = response.videoDetails?.title ?: ""
+        val author = response.videoDetails?.author ?: ""
+        val q =
+            "$title $author"
+                .replace(Regex("\\((feat\\.|ft.|cùng với|con|mukana|com|avec|合作音乐人: ) "), " ")
+                .replace(Regex("( và | & | и | e | und |, |和| dan)"), " ")
+                .replace("  ", " ")
+                .replace(Regex("([()])"), "")
+                .replace(".", " ")
+                .replace("  ", " ")
+        youTube
+            .searchTidalMetadata(q, durationSecond)
+            .onSuccess { metadata ->
+                // Match the stream generation in SQL and update only metadata. A delayed
+                // result cannot overwrite a replacement URL or undo its invalidation.
+                localDataSource.updateAutoMixMetadata(newFormat, metadata.bpm, metadata.musicKey, metadata.keyScale)
+            }.onFailure {
+                if (it is CancellationException) throw it
+                Logger.e("Stream", "Tidal metadata error: ${it.message}", it)
+            }
+    }
 
     override fun initPlayback(
         playback: String,

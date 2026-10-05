@@ -28,6 +28,8 @@ import com.nothingplayer.app.viewModel.base.BaseViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -137,6 +139,14 @@ class SettingsViewModel(
     val crossfadeDuration: StateFlow<Int> = _crossfadeDuration
     private val _crossfadeDjMode = MutableStateFlow<Boolean>(true)
     val crossfadeDjMode: StateFlow<Boolean> = _crossfadeDjMode
+    val androidAutoLyrics = dataStoreManager.androidAutoLyrics
+        .map { it == DataStoreManager.TRUE }
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000), false)
+
+    fun setAndroidAutoLyrics(enabled: Boolean) {
+        viewModelScope.launch { dataStoreManager.setAndroidAutoLyrics(enabled) }
+    }
+
     private val _lyricsOffset = MutableStateFlow<Int>(0)
     val lyricsOffset: StateFlow<Int> = _lyricsOffset
     private val _youtubeSubtitleLanguage = MutableStateFlow<String>("")

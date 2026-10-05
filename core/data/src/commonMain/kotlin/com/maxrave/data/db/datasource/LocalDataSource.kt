@@ -378,6 +378,9 @@ internal class LocalDataSource(
 
     suspend fun updateNewFormat(newFormatEntity: NewFormatEntity) = databaseDao.updateNewFormat(newFormatEntity)
 
+    suspend fun updateAutoMixMetadata(format: NewFormatEntity, bpm: Int?, musicKey: String?, keyScale: String?) =
+        databaseDao.updateAutoMixMetadata(format.videoId, format.cpn, format.expiredTime, bpm, musicKey, keyScale)
+
     suspend fun getNewFormatAsFlow(videoId: String) = databaseDao.getNewFormatAsFlow(videoId)
 
     suspend fun insertSongInfo(songInfo: SongInfoEntity) = databaseDao.insertSongInfo(songInfo)

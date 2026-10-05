@@ -4,6 +4,7 @@ import com.maxrave.domain.data.model.update.UpdateData
 import com.maxrave.domain.repository.UpdateRepository
 import com.maxrave.domain.utils.Resource
 import com.maxrave.kotlinytmusicscraper.YouTube
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -17,16 +18,25 @@ internal class UpdateRepositoryImpl(
             youTube
                 .checkForGithubReleaseUpdate()
                 .onSuccess { response ->
+                    val tag = response.tagName?.takeIf { it.isNotBlank() }
+                    if (tag == null || response.draft == true || response.prerelease == true) {
+                        emit(Resource.Error<UpdateData>("GitHub did not return a stable release"))
+                        return@onSuccess
+                    }
                     emit(
                         Resource.Success(
                             UpdateData(
-                                tagName = response.tagName ?: "",
+                                tagName = tag,
                                 releaseTime = response.publishedAt ?: "",
                                 body = response.body ?: "",
+                                releaseUrl = response.htmlUrl
+                                    ?.takeIf { it.startsWith("https://github.com/iniharith/Nothing-Player/releases/") }
+                                    ?: "https://github.com/iniharith/Nothing-Player/releases/latest",
                             ),
                         ),
                     )
                 }.onFailure {
+                    if (it is CancellationException) throw it
                     emit(Resource.Error<UpdateData>(it.localizedMessage ?: "Unknown error"))
                 }
         }.flowOn(Dispatchers.IO)

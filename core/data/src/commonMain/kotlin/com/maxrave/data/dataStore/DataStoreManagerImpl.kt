@@ -310,7 +310,7 @@ internal class DataStoreManagerImpl(
 
     override val saveRecentSongAndQueue: Flow<String> =
         settingsDataStore.data.map { preferences ->
-            preferences[SAVE_RECENT_SONG] ?: FALSE
+            preferences[SAVE_RECENT_SONG] ?: TRUE
         }
 
     override suspend fun setSaveRecentSongAndQueue(save: Boolean) {
@@ -964,6 +964,17 @@ internal class DataStoreManagerImpl(
         }
     }
 
+    override val lastUpdateCheckTime =
+        settingsDataStore.data.map { preferences ->
+            preferences[LAST_UPDATE_CHECK_TIME] ?: 0L
+        }
+
+    override suspend fun setLastUpdateCheckTime(timeMillis: Long) {
+        settingsDataStore.edit { settings ->
+            settings[LAST_UPDATE_CHECK_TIME] = timeMillis
+        }
+    }
+
     override val updateChannel =
         settingsDataStore.data.map { preferences ->
             preferences[UPDATE_CHANNEL] ?: GITHUB
@@ -1518,6 +1529,12 @@ internal class DataStoreManagerImpl(
         }
     }
 
+    override val androidAutoLyrics: Flow<String> = settingsDataStore.data.map { it[ANDROID_AUTO_LYRICS] ?: FALSE }
+
+    override suspend fun setAndroidAutoLyrics(enabled: Boolean) {
+        settingsDataStore.edit { it[ANDROID_AUTO_LYRICS] = if (enabled) TRUE else FALSE }
+    }
+
     override val lyricsOffset: Flow<Int> =
         settingsDataStore.data.map { preferences ->
             preferences[LYRICS_OFFSET] ?: 0
@@ -1595,6 +1612,7 @@ internal class DataStoreManagerImpl(
         val COMBINE_LOCAL_AND_YOUTUBE_LIKED = stringPreferencesKey("combine_local_and_youtube_liked")
         val SHOULD_SHOW_LOG_IN_REQUIRED_ALERT = stringPreferencesKey("should_show_log_in_required_alert")
         val AUTO_CHECK_FOR_UPDATES = stringPreferencesKey("auto_check_for_updates")
+        val LAST_UPDATE_CHECK_TIME = longPreferencesKey("last_update_check_time")
         val UPDATE_CHANNEL = stringPreferencesKey("update_channel")
         val PLAYBACK_SPEED = floatPreferencesKey("playback_speed")
         val PITCH = intPreferencesKey("pitch")
@@ -1644,6 +1662,7 @@ internal class DataStoreManagerImpl(
         val AOD_SHOW_ALBUM_ART = stringPreferencesKey("aod_show_album_art")
 
         // Lyrics sync offset (ms). Negative delays the highlight.
+        val ANDROID_AUTO_LYRICS = stringPreferencesKey("android_auto_lyrics")
         val LYRICS_OFFSET = intPreferencesKey("lyrics_offset")
     }
 }

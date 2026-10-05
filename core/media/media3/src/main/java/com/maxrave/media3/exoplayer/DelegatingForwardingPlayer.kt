@@ -5,6 +5,7 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.TextureView
 import androidx.media3.common.ForwardingPlayer
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -70,6 +71,20 @@ internal class DelegatingForwardingPlayer(
          * default to [seekToPrevious] if the distinction is irrelevant.
          */
         fun seekToPreviousMediaItem() = seekToPrevious()
+
+        fun setMediaItems(mediaItems: List<MediaItem>, startIndex: Int, startPositionMs: Long)
+
+        fun prepare()
+
+        fun play()
+
+        fun pause()
+
+        fun stop()
+
+        fun clearMediaItems()
+
+        fun currentQueueIndex(): Int
     }
 
     /**
@@ -77,6 +92,67 @@ internal class DelegatingForwardingPlayer(
      * When null, all navigation methods fall back to the underlying ExoPlayer (single-item behavior).
      */
     var playlistNavigationProvider: PlaylistNavigationProvider? = null
+
+    // Session/controller commands must mutate the adapter that owns the real queue.
+    // Timeline getters still describe the single-track delegate to satisfy Media3.
+    override fun setMediaItems(mediaItems: List<MediaItem>) = setMediaItems(mediaItems, true)
+
+    override fun setMediaItems(mediaItems: List<MediaItem>, resetPosition: Boolean) {
+        val provider = playlistNavigationProvider
+        if (provider == null) {
+            super.setMediaItems(mediaItems, resetPosition)
+        } else {
+            provider.setMediaItems(
+                mediaItems,
+                if (resetPosition) 0 else provider.currentQueueIndex(),
+                if (resetPosition) C.TIME_UNSET else currentPosition,
+            )
+        }
+    }
+
+    override fun setMediaItems(mediaItems: List<MediaItem>, startIndex: Int, startPositionMs: Long) {
+        val provider = playlistNavigationProvider
+        if (provider == null) super.setMediaItems(mediaItems, startIndex, startPositionMs)
+        else provider.setMediaItems(mediaItems, startIndex, startPositionMs)
+    }
+
+    override fun setMediaItem(mediaItem: MediaItem) = setMediaItems(listOf(mediaItem), 0, C.TIME_UNSET)
+
+    override fun setMediaItem(mediaItem: MediaItem, startPositionMs: Long) = setMediaItems(listOf(mediaItem), 0, startPositionMs)
+
+    override fun setMediaItem(mediaItem: MediaItem, resetPosition: Boolean) =
+        setMediaItems(listOf(mediaItem), 0, if (resetPosition) C.TIME_UNSET else currentPosition)
+
+    override fun prepare() {
+        val provider = playlistNavigationProvider
+        if (provider == null) super.prepare() else provider.prepare()
+    }
+
+    override fun play() {
+        val provider = playlistNavigationProvider
+        if (provider == null) super.play() else provider.play()
+    }
+
+    override fun pause() {
+        val provider = playlistNavigationProvider
+        if (provider == null) super.pause() else provider.pause()
+    }
+
+    override fun setPlayWhenReady(playWhenReady: Boolean) {
+        val provider = playlistNavigationProvider
+        if (provider == null) super.setPlayWhenReady(playWhenReady)
+        else if (playWhenReady) provider.play() else provider.pause()
+    }
+
+    override fun stop() {
+        val provider = playlistNavigationProvider
+        if (provider == null) super.stop() else provider.stop()
+    }
+
+    override fun clearMediaItems() {
+        val provider = playlistNavigationProvider
+        if (provider == null) super.clearMediaItems() else provider.clearMediaItems()
+    }
 
     // ========== Playback-Ended Suppression ==========
 

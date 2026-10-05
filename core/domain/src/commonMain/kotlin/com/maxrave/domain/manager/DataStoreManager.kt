@@ -240,6 +240,10 @@ interface DataStoreManager {
 
     suspend fun setAutoCheckForUpdates(autoCheck: Boolean)
 
+    val lastUpdateCheckTime: Flow<Long>
+
+    suspend fun setLastUpdateCheckTime(timeMillis: Long)
+
     val updateChannel: Flow<String>
 
     suspend fun setUpdateChannel(channel: String)
@@ -411,6 +415,9 @@ interface DataStoreManager {
 
     // Lyrics sync offset in ms, subtracted from the effective playback position when picking the
     // active lyric line. Positive delays the highlight (fixes lyrics that appear too early).
+    val androidAutoLyrics: Flow<String>
+    suspend fun setAndroidAutoLyrics(enabled: Boolean)
+
     val lyricsOffset: Flow<Int>
 
     suspend fun setLyricsOffset(offsetMs: Int)

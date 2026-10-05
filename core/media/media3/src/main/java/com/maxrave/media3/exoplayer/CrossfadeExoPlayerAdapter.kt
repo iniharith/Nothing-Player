@@ -76,6 +76,7 @@ internal class CrossfadeExoPlayerAdapter(
     private val mediaSourceFactory: MergingMediaSourceFactory,
     private val audioAttributes: AudioAttributes,
     private val streamRepository: StreamRepository,
+    private val streamUrlCache: StreamUrlCache,
 ) : MediaPlayerInterface {
     // ========== Internal State Enum (same as GstreamerPlayerAdapter) ==========
 
@@ -131,7 +132,7 @@ internal class CrossfadeExoPlayerAdapter(
     private var internalState = InternalState.IDLE
 
     @Volatile
-    private var internalPlayWhenReady = true
+    private var internalPlayWhenReady = false
 
     @Volatile
     private var internalVolume = 1.0f
@@ -370,6 +371,22 @@ internal class CrossfadeExoPlayerAdapter(
                 override fun seekToPrevious(): Unit = this@CrossfadeExoPlayerAdapter.seekToPrevious()
 
                 override fun seekToPreviousMediaItem(): Unit = this@CrossfadeExoPlayerAdapter.seekToPreviousMediaItem()
+
+                override fun setMediaItems(mediaItems: List<MediaItem>, startIndex: Int, startPositionMs: Long) {
+                    replaceSessionQueue(mediaItems, startIndex, startPositionMs)
+                }
+
+                override fun prepare(): Unit = this@CrossfadeExoPlayerAdapter.prepare()
+
+                override fun play(): Unit = this@CrossfadeExoPlayerAdapter.play()
+
+                override fun pause(): Unit = this@CrossfadeExoPlayerAdapter.pause()
+
+                override fun stop(): Unit = this@CrossfadeExoPlayerAdapter.stop()
+
+                override fun clearMediaItems(): Unit = this@CrossfadeExoPlayerAdapter.clearMediaItems()
+
+                override fun currentQueueIndex(): Int = localCurrentMediaItemIndex.coerceAtLeast(0)
             }
     }
 
@@ -503,13 +520,12 @@ internal class CrossfadeExoPlayerAdapter(
                     DefaultLoadControl
                         .Builder()
                         .setBufferDurationsMs(
-                            DefaultLoadControl.DEFAULT_MIN_BUFFER_MS * 4,
-                            DefaultLoadControl.DEFAULT_MAX_BUFFER_MS * 4,
-                            // Start/rebuffer thresholds of 0 made playback begin before a single
-                            // chunk was buffered — instant start, then an immediate stall that
-                            // looked like "loading forever" / a stuck Auto session.
-                            DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
-                            DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
+                            DefaultLoadControl.DEFAULT_MIN_BUFFER_MS,
+                            DefaultLoadControl.DEFAULT_MAX_BUFFER_MS,
+                            // Buffer enough for a stable audio start without waiting for the
+                            // default 2.5s/5s thresholds or fetching 200s per cached player.
+                            1_000,
+                            2_500,
                         ).build(),
                 ).setWakeMode(C.WAKE_MODE_NETWORK)
                 .setHandleAudioBecomingNoisy(true)
@@ -526,6 +542,7 @@ internal class CrossfadeExoPlayerAdapter(
 
     override fun play() {
         Logger.d(TAG, "play() called (state: $internalState, playWhenReady: $internalPlayWhenReady)")
+        internalPlayWhenReady = true
         castRemotePlayer?.let { remote ->
             internalPlayWhenReady = true
             remote.play()
@@ -533,6 +550,12 @@ internal class CrossfadeExoPlayerAdapter(
         }
         coroutineScope.launch {
             when (internalState) {
+                InternalState.IDLE -> {
+                    if (playlist.isNotEmpty() && localCurrentMediaItemIndex in playlist.indices) {
+                        loadAndPlayTrackInternal(localCurrentMediaItemIndex, cachedPosition, true)
+                    }
+                }
+
                 InternalState.READY, InternalState.ENDED, InternalState.PAUSED -> {
                     currentPlayer?.let { player ->
                         requestAudioFocusInternal()
@@ -561,6 +584,7 @@ internal class CrossfadeExoPlayerAdapter(
 
     override fun pause() {
         Logger.d(TAG, "pause() called (state: $internalState, playWhenReady: $internalPlayWhenReady)")
+        internalPlayWhenReady = false
         castRemotePlayer?.let { remote ->
             internalPlayWhenReady = false
             remote.pause()
@@ -598,12 +622,23 @@ internal class CrossfadeExoPlayerAdapter(
     }
 
     override fun stop() {
+        internalPlayWhenReady = false
+        currentLoadJob?.cancel()
+        currentLoadJob = null
+        cancelPrecaching()
         castRemotePlayer?.let { remote ->
             remote.stop()
             return
         }
         coroutineScope.launch {
             forwardingPlayer.suppressPlaybackEnded = false
+            crossfadeJob?.cancel()
+            crossfadeJob = null
+            secondaryPlayer?.let { cleanupPlayerInternal(it) }
+            secondaryPlayer = null
+            secondaryPlayerFilter = null
+            setCrossfading(false)
+            clearAllPrecacheInternal()
             currentPlayer?.let { player ->
                 Logger.d(TAG, "Stop called")
                 player.stop()
@@ -740,14 +775,34 @@ internal class CrossfadeExoPlayerAdapter(
     }
 
     override fun prepare() {
-        if (playlist.isNotEmpty() && localCurrentMediaItemIndex >= 0) {
+        if (playlist.isNotEmpty() && localCurrentMediaItemIndex >= 0 && currentLoadJob?.isActive != true) {
             coroutineScope.launch {
-                loadAndPlayTrackInternal(localCurrentMediaItemIndex, 0, false)
+                if (currentPlayer?.playbackState == Player.STATE_IDLE) {
+                    loadAndPlayTrackInternal(localCurrentMediaItemIndex, cachedPosition, internalPlayWhenReady)
+                }
             }
         }
     }
 
     // ========== Media Item Management ==========
+
+    /** Session resumption must restore the adapter queue, not only its one-track delegate. */
+    private fun replaceSessionQueue(mediaItems: List<MediaItem>, startIndex: Int, startPositionMs: Long) {
+        currentLoadJob?.cancel()
+        cancelPrecaching()
+        clearAllPrecacheInternal()
+        playlist.clear()
+        playlist.addAll(mediaItems.map { it.toGenericMediaItem() })
+        if (playlist.isEmpty()) {
+            clearMediaItems()
+            return
+        }
+        localCurrentMediaItemIndex = startIndex.coerceIn(playlist.indices)
+        cachedPosition = startPositionMs.coerceAtLeast(0L)
+        if (internalShuffleModeEnabled) createShuffleOrder()
+        notifyTimelineChanged("TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED")
+        loadAndPlayTrackInternal(localCurrentMediaItemIndex, cachedPosition, internalPlayWhenReady)
+    }
 
     override fun setMediaItem(mediaItem: GenericMediaItem) {
         coroutineScope.launch {
@@ -903,13 +958,35 @@ internal class CrossfadeExoPlayerAdapter(
     }
 
     override fun clearMediaItems() {
+        internalPlayWhenReady = false
+        currentLoadJob?.cancel()
+        currentLoadJob = null
+        cancelPrecaching()
         coroutineScope.launch {
             playlist.clear()
             localCurrentMediaItemIndex = -1
             clearShuffleOrder()
             notifyTimelineChanged("TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED")
-            cleanupCurrentPlayerInternal()
+            stopPositionUpdates()
+            crossfadeJob?.cancel()
+            crossfadeJob = null
+            secondaryPlayer?.let { cleanupPlayerInternal(it) }
+            secondaryPlayer = null
+            secondaryPlayerFilter = null
+            setCrossfading(false)
+            currentPlayerFilter?.enabled = false
+            // Keep the singleton's session delegate usable for a later car/app connection.
+            // Releasing it here leaves MediaSession attached to a dead ExoPlayer.
+            currentPlayer?.stop()
+            currentPlayer?.clearMediaItems()
             clearAllPrecacheInternal()
+            cachedPosition = 0L
+            cachedDuration = 0L
+            cachedBufferedPosition = 0L
+            cachedIsLoading = false
+            transitionToState(InternalState.IDLE)
+            abandonAudioFocusInternal()
+            notifyEqualizerIntent(false)
         }
     }
 
@@ -1012,17 +1089,17 @@ internal class CrossfadeExoPlayerAdapter(
     // ========== Navigation ==========
 
     override fun hasNextMediaItem(): Boolean =
-        when (internalRepeatMode) {
+        playlist.isNotEmpty() && when (internalRepeatMode) {
             PlayerConstants.REPEAT_MODE_ONE -> true
             PlayerConstants.REPEAT_MODE_ALL -> true
-            else -> localCurrentMediaItemIndex < playlist.size - 1
+            else -> getNextMediaItemIndex() != localCurrentMediaItemIndex
         }
 
     override fun hasPreviousMediaItem(): Boolean =
-        when (internalRepeatMode) {
+        playlist.isNotEmpty() && when (internalRepeatMode) {
             PlayerConstants.REPEAT_MODE_ONE -> true
             PlayerConstants.REPEAT_MODE_ALL -> true
-            else -> localCurrentMediaItemIndex > 0
+            else -> getPreviousMediaItemIndex() != localCurrentMediaItemIndex
         }
 
     private fun getNextMediaItemIndex(): Int =
@@ -1312,6 +1389,12 @@ internal class CrossfadeExoPlayerAdapter(
     ) {
         if (index !in playlist.indices) return
 
+        internalPlayWhenReady = shouldPlay
+
+        // A transition can persist the new track immediately. Reset its position
+        // before notifying listeners so it never inherits the previous song's time.
+        cachedPosition = startPositionMs.coerceAtLeast(0L)
+
         val mediaItem = playlist[index]
         val videoId = mediaItem.mediaId
 
@@ -1342,7 +1425,11 @@ internal class CrossfadeExoPlayerAdapter(
                     }
 
                     // Use precached player if available
-                    val cachedPlayerEntry = precachedPlayers.remove(videoId)
+                    val candidate = precachedPlayers.remove(videoId)
+                    val cachedPlayerEntry = candidate?.takeIf {
+                        it.player.playerError == null && it.player.playbackState != Player.STATE_IDLE
+                    }
+                    if (candidate != null && cachedPlayerEntry == null) cleanupPlayerInternal(candidate.player)
                     val player: ExoPlayer
                     val playerFilter: CrossfadeFilterAudioProcessor?
                     if (cachedPlayerEntry?.player != null) {
@@ -1413,7 +1500,7 @@ internal class CrossfadeExoPlayerAdapter(
                     }
 
                     // Auto-play if requested
-                    if (shouldPlay) {
+                    if (internalPlayWhenReady) {
                         requestAudioFocusInternal()
                         player.play()
                         transitionToState(InternalState.PLAYING)
@@ -1562,6 +1649,8 @@ internal class CrossfadeExoPlayerAdapter(
                             coroutineScope.launch {
                                 try {
                                     // Invalidate cached format so ResolvingDataSource fetches a fresh URL
+                                    streamUrlCache.invalidate(currentVideoId)
+                                    streamUrlCache.invalidate("${com.maxrave.common.MERGING_DATA_TYPE.VIDEO}$currentVideoId")
                                     streamRepository.invalidateFormat(currentVideoId)
                                     streamRepository.invalidateFormat("${com.maxrave.common.MERGING_DATA_TYPE.VIDEO}$currentVideoId")
                                     // Evict from precache (it may hold a stale player)
@@ -2663,40 +2752,39 @@ internal class CrossfadeExoPlayerAdapter(
         precacheJob =
             coroutineScope.launch {
                 try {
-                    val indicesToPrecache = mutableListOf<Int>()
-
-                    val index = localCurrentMediaItemIndex
-                    for (i in 1..maxPrecacheCount) {
-                        val nextIndex =
-                            when (internalRepeatMode) {
-                                PlayerConstants.REPEAT_MODE_ALL -> {
-                                    (index + i) % playlist.size
-                                }
-                                else -> {
-                                    val next = index + i
-                                    if (next < playlist.size) next else break
-                                }
-                            }
-
-                        if (nextIndex != localCurrentMediaItemIndex &&
-                            !precachedPlayers.containsKey(playlist.getOrNull(nextIndex)?.mediaId)
-                        ) {
-                            indicesToPrecache.add(nextIndex)
-                        }
+                    // Give the selected track its first playable buffer before additional
+                    // players compete for extraction/HTTP bandwidth.
+                    while (currentPlayer?.playbackState == Player.STATE_BUFFERING && isActive) {
+                        delay(100)
                     }
+                    if (currentPlayer?.playbackState != Player.STATE_READY || !internalPlayWhenReady) return@launch
+                    val orderedIndices =
+                        if (internalShuffleModeEnabled && shuffleOrder.isNotEmpty()) shuffleOrder.toList()
+                        else playlist.indices.toList()
+                    val indicesToPrecache =
+                        upcomingTrackIndices(
+                            orderedIndices,
+                            localCurrentMediaItemIndex,
+                            maxPrecacheCount,
+                            repeatAll = internalRepeatMode == PlayerConstants.REPEAT_MODE_ALL,
+                            repeatOne = internalRepeatMode == PlayerConstants.REPEAT_MODE_ONE,
+                        ).filter { !precachedPlayers.containsKey(playlist.getOrNull(it)?.mediaId) }
 
                     for (idx in indicesToPrecache) {
                         if (!isActive) break
 
                         val mediaItem = playlist.getOrNull(idx) ?: continue
 
+                        var pwf: PlayerWithFilter? = null
                         try {
-                            val pwf = createExoPlayerInstance()
+                            pwf = createExoPlayerInstance()
                             pwf.player.setMediaItem(mediaItem.toMedia3MediaItem())
                             pwf.player.prepare()
                             precachedPlayers[mediaItem.mediaId] = PrecachedPlayer(pwf.player, mediaItem, pwf.filter)
                             Logger.d(TAG, "Precached player for index $idx")
                         } catch (e: Exception) {
+                            pwf?.player?.let { cleanupPlayerInternal(it) }
+                            if (e is CancellationException) throw e
                             Logger.e(TAG, "Precaching error for $idx: ${e.message}")
                         }
 

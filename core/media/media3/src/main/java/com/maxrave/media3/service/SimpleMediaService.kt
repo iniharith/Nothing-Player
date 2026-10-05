@@ -1,274 +1,200 @@
 package com.maxrave.media3.service
 
 import android.app.Activity
-import android.app.ActivityManager
-import android.app.ActivityManager.RunningAppProcessInfo
-import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import androidx.core.app.NotificationCompat
 import androidx.core.content.getSystemService
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.DefaultMediaNotificationProvider
-import androidx.media3.session.MediaController
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
-import androidx.media3.session.SessionToken
-import androidx.media3.ui.DefaultMediaDescriptionAdapter
-import androidx.media3.ui.PlayerNotificationManager
-import com.google.common.util.concurrent.MoreExecutors
 import com.maxrave.common.MEDIA_NOTIFICATION
-import com.maxrave.domain.manager.DataStoreManager
 import com.maxrave.domain.mediaservice.handler.MediaPlayerHandler
 import com.maxrave.logger.Logger
 import com.maxrave.media3.R
 import com.maxrave.media3.extension.toCommandButton
+import com.maxrave.media3.service.callback.SimpleMediaSessionCallback
 import com.maxrave.media3.utils.CoilBitmapLoader
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 import org.koin.core.qualifier.named
-import kotlin.time.Duration.Companion.seconds
 
 @UnstableApi
-internal class SimpleMediaService :
-    MediaLibraryService(),
-    KoinComponent {
-    private val coroutineScope by inject<CoroutineScope>(named(com.maxrave.common.Config.SERVICE_SCOPE))
-    // Session-level player from DI: the ForwardingPlayer wrapped with Cast support in the
-    // full build (plain ForwardingPlayer in the FOSS build).
-    private val player: Player by inject<Player>(qualifier = named(com.maxrave.common.Config.MAIN_PLAYER))
-    private val coilBitmapLoader: CoilBitmapLoader by inject<CoilBitmapLoader>()
-
+internal class SimpleMediaService : MediaLibraryService(), KoinComponent {
+    private val player: Player by inject(qualifier = named(com.maxrave.common.Config.MAIN_PLAYER))
+    private val coilBitmapLoader: CoilBitmapLoader by inject()
+    private val simpleMediaSessionCallback: MediaLibrarySession.Callback by inject()
+    private val simpleMediaServiceHandler: MediaPlayerHandler by inject()
+    private val lyricsSettings: com.maxrave.domain.manager.DataStoreManager by inject()
+    private val lyricsRepository: com.maxrave.domain.repository.LyricsCanvasRepository by inject()
+    private lateinit var carLyricsPlayer: CarLyricsPlayer
     private var mediaSession: MediaLibrarySession? = null
-
-    private val simpleMediaSessionCallback: MediaLibrarySession.Callback by inject<MediaLibrarySession.Callback>()
-
-    private val simpleMediaServiceHandler: MediaPlayerHandler by inject<MediaPlayerHandler>()
-    private val dataStoreManager: DataStoreManager by inject<DataStoreManager>()
-
     private val binder = MusicBinder()
-
-    private lateinit var playerNotificationManager: PlayerNotificationManager
-
-    // Keep-alive loop for the "keep service alive" setting. A new notification post must cancel the
-    // previous loop before starting a new one, otherwise one infinite 30s loop stacks up per
-    // notification and the process slowly drowns in them (memory/battery drain, ANRs).
-    private var keepAliveJob: Job? = null
+    private var preparingPlayback = false
+    private val preparationHandler = Handler(Looper.getMainLooper())
+    private val preparationTimeout = Runnable {
+        if (preparingPlayback) {
+            stopPlayback()
+            mediaSession?.release()
+            mediaSession = null
+        }
+    }
 
     inner class MusicBinder : Binder() {
         val service: SimpleMediaService
             get() = this@SimpleMediaService
 
-        fun setActivitySession(
-            context: Context,
-            activity: Class<out Activity>,
-        ) {
+        fun setActivitySession(context: Context, activity: Class<out Activity>) {
             mediaSession?.setSessionActivity(
-                PendingIntent.getActivity(
-                    context,
-                    0,
-                    Intent(context, activity),
-                    PendingIntent.FLAG_IMMUTABLE,
-                ),
+                PendingIntent.getActivity(context, 0, Intent(context, activity), PendingIntent.FLAG_IMMUTABLE),
             )
         }
     }
 
-    override fun onBind(intent: Intent?): IBinder {
-        Logger.w("Service", "Simple Media Service Bound")
-        return super.onBind(intent) ?: binder
-    }
+    override fun onBind(intent: Intent?): IBinder = super.onBind(intent) ?: binder
 
-    @UnstableApi
     override fun onCreate() {
         super.onCreate()
-        Logger.w("Service", "Simple Media Service Created")
-
+        // Media3 owns the foreground lifecycle. A paused player must not keep an
+        // ongoing service alive or be promoted by a second notification manager.
+        setForegroundServiceTimeoutMs(0)
+        setShowNotificationForIdlePlayer(SHOW_NOTIFICATION_FOR_IDLE_PLAYER_NEVER)
         setMediaNotificationProvider(
             DefaultMediaNotificationProvider(
                 this,
                 { MEDIA_NOTIFICATION.NOTIFICATION_ID },
                 MEDIA_NOTIFICATION.NOTIFICATION_CHANNEL_ID,
                 R.string.notification_channel_name,
-            ).apply {
-                setSmallIcon(R.drawable.mono)
-            },
+            ).apply { setSmallIcon(R.drawable.mono) },
         )
-
-        if (mediaSession == null) {
-            mediaSession =
-                provideMediaLibrarySession(
-                    this,
-                    player,
-                    simpleMediaSessionCallback,
-                )
+        getSystemService<NotificationManager>()?.cancel(2026)
+        carLyricsPlayer = CarLyricsPlayer(player, lyricsSettings, lyricsRepository)
+        mediaSession =
+            MediaLibrarySession.Builder(this, carLyricsPlayer, simpleMediaSessionCallback)
+                .setId(javaClass.name)
+                .setBitmapLoader(coilBitmapLoader)
+                .build()
+        (simpleMediaSessionCallback as? SimpleMediaSessionCallback)?.onCarConnectionChanged = carLyricsPlayer::setCarConnected
+        // Register without a controller bound to our own service. That self-binding
+        // prevented destruction even after the activity disconnected.
+        mediaSession?.let(::addSession)
+        (simpleMediaSessionCallback as? SimpleMediaSessionCallback)?.prepareForPlayback = ::prepareForegroundPlayback
+        (simpleMediaSessionCallback as? SimpleMediaSessionCallback)?.cancelPlaybackPreparation = {
+            if (preparingPlayback) stopPlayback()
         }
-
-        val sessionToken = SessionToken(this, ComponentName(this, SimpleMediaService::class.java))
-        val controllerFuture = MediaController.Builder(this, sessionToken).buildAsync()
-        controllerFuture.addListener({ controllerFuture.get() }, MoreExecutors.directExecutor())
-
-        if (runBlocking { dataStoreManager.keepServiceAlive.first() == DataStoreManager.TRUE }) {
-            val notificationManager = getSystemService<NotificationManager>()
-            notificationManager?.run {
-                createNotificationChannel(
-                    NotificationChannel(
-                        "media_playback_channel",
-                        "Nothing Player Now Playing",
-                        NotificationManager.IMPORTANCE_LOW,
-                    ).apply {
-                        setSound(null, null)
-                        enableLights(false)
-                        enableVibration(false)
-                    },
-                )
-            }
-            playerNotificationManager =
-                PlayerNotificationManager
-                    .Builder(this, 2026, "media_playback_channel")
-                    .setNotificationListener(
-                        object : PlayerNotificationManager.NotificationListener {
-                            override fun onNotificationPosted(
-                                notificationId: Int,
-                                notification: Notification,
-                                ongoing: Boolean,
-                            ) {
-                                fun startFg() {
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                        startForeground(notificationId, notification, FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
-                                    } else {
-                                        startForeground(notificationId, notification)
-                                    }
-                                }
-                                keepAliveJob?.cancel()
-                                keepAliveJob =
-                                    coroutineScope.launch {
-                                        while (isActive) {
-                                            startFg()
-                                            delay(30.seconds)
-                                        }
-                                    }
-                            }
-                        },
-                    ).setMediaDescriptionAdapter(DefaultMediaDescriptionAdapter(mediaSession?.sessionActivity))
-                    .build()
-            playerNotificationManager.setPlayer(player)
-            playerNotificationManager.setSmallIcon(R.drawable.mono)
-            mediaSession?.platformToken?.let { playerNotificationManager.setMediaSessionToken(it) }
+        simpleMediaServiceHandler.onUpdateNotification = { buttons ->
+            mediaSession?.setMediaButtonPreferences(buttons.map { it.toCommandButton(this) })
         }
-
-        simpleMediaServiceHandler.onUpdateNotification = { list ->
-            val commandButtonList = list.map { it.toCommandButton(this) }
-            mediaSession?.setMediaButtonPreferences(
-                commandButtonList,
-            )
-        }
-    }
-
-    @UnstableApi
-    override fun onStartCommand(
-        intent: Intent?,
-        flags: Int,
-        startId: Int,
-    ): Int {
-        Logger.w("Service", "Simple Media Service Received Action: ${intent?.action}")
-        return super.onStartCommand(intent, flags, startId)
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = mediaSession
 
-    @UnstableApi
-    override fun onUpdateNotification(
-        session: MediaSession,
-        startInForegroundRequired: Boolean,
-    ) {
-        super.onUpdateNotification(session, startInForegroundRequired)
-    }
-
-    @UnstableApi
-    fun release() {
-        Logger.w("Service", "Starting release process")
-        runBlocking {
-            try {
-                // Release MediaSession (don't release player - CrossfadeExoPlayerAdapter manages it)
-                mediaSession?.run {
-                    this.player.pause()
-                    this.player.playWhenReady = false
-                    // Don't call this.player.release() - CrossfadeExoPlayerAdapter manages player lifecycle
-                    this.release()
-                }
-                // Release handler (contains coroutines and jobs, which also releases the adapter)
-                simpleMediaServiceHandler.release()
-                mediaSession = null
-                Logger.w("Service", "Simple Media Service Released")
-            } catch (e: Exception) {
-                Logger.e("Service", "Error during release")
+    private fun prepareForegroundPlayback(): Boolean {
+        if (preparingPlayback || isPlaybackOngoing) return true
+        return try {
+            getSystemService<NotificationManager>()?.createNotificationChannel(
+                NotificationChannel(
+                    MEDIA_NOTIFICATION.NOTIFICATION_CHANNEL_ID,
+                    getString(R.string.notification_channel_name),
+                    NotificationManager.IMPORTANCE_LOW,
+                ),
+            )
+            // A real car/media-button resume needs foreground status before the
+            // custom adapter can request audio focus on Android 15 and later.
+            val notification =
+                NotificationCompat.Builder(this, MEDIA_NOTIFICATION.NOTIFICATION_CHANNEL_ID)
+                    .setSmallIcon(R.drawable.mono)
+                    .setContentTitle(player.mediaMetadata.title ?: getString(R.string.notification_channel_name))
+                    .setContentText(getString(R.string.preparing_playback))
+                    .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
+                    .setSilent(true)
+                    .setOngoing(true)
+                    .build()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(MEDIA_NOTIFICATION.NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+            } else {
+                startForeground(MEDIA_NOTIFICATION.NOTIFICATION_ID, notification)
             }
+            preparingPlayback = true
+            preparationHandler.postDelayed(preparationTimeout, 30_000L)
+            true
+        } catch (error: IllegalStateException) {
+            Logger.w("Service", "Playback foreground start denied: ${error.message}")
+            false
+        } catch (error: SecurityException) {
+            Logger.w("Service", "Playback foreground permission denied: ${error.message}")
+            false
         }
     }
 
-    @UnstableApi
-    override fun onDestroy() {
-        super.onDestroy()
-        Logger.w("Service", "Simple Media Service Destroyed")
-        keepAliveJob?.cancel()
-        if (simpleMediaServiceHandler.shouldReleaseOnTaskRemoved()) {
-            release()
+    override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
+        // The adapter has not yet swapped in its buffering player. Keep the brief
+        // foreground notification until playback intent reaches that delegate.
+        if (preparingPlayback && !session.player.playWhenReady && session.player.playerError == null) return
+        super.onUpdateNotification(session, startInForegroundRequired)
+        if (session.player.playWhenReady && session.player.playbackState != Player.STATE_IDLE) {
+            preparingPlayback = false
+            preparationHandler.removeCallbacks(preparationTimeout)
         }
+    }
+
+    private fun stopPlayback() {
+        preparingPlayback = false
+        preparationHandler.removeCallbacks(preparationTimeout)
+        simpleMediaServiceHandler.stopPlaybackSession()
+        pauseAllPlayersAndStopSelf()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        getSystemService<NotificationManager>()?.cancel(MEDIA_NOTIFICATION.NOTIFICATION_ID)
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        val playback = simpleMediaServiceHandler.player
+        val wantsPlayback =
+            PlaybackServicePolicy.shouldContinuePlayback(
+                playback.playWhenReady,
+                playback.mediaItemCount,
+                playback.playbackState == Player.STATE_READY || playback.playbackState == Player.STATE_BUFFERING,
+                simpleMediaServiceHandler.shouldReleaseOnTaskRemoved(),
+            )
+        if (!wantsPlayback) {
+            stopPlayback()
+            // Disconnect controllers so an idle dismissed service can actually stop.
+            mediaSession?.release()
+            mediaSession = null
+        }
+    }
+
+    override fun onDestroy() {
+        (simpleMediaSessionCallback as? SimpleMediaSessionCallback)?.onCarConnectionChanged = {}
+        if (::carLyricsPlayer.isInitialized) carLyricsPlayer.close()
+        preparationHandler.removeCallbacksAndMessages(null)
+        // The handler/player are DI singletons. Cancelling their shared scope here
+        // breaks the next app launch and Android Auto reconnect.
+        simpleMediaServiceHandler.onUpdateNotification = {}
+        (simpleMediaSessionCallback as? SimpleMediaSessionCallback)?.prepareForPlayback = { false }
+        (simpleMediaSessionCallback as? SimpleMediaSessionCallback)?.cancelPlaybackPreparation = {}
+        simpleMediaServiceHandler.stopPlaybackSession()
+        mediaSession?.release()
+        mediaSession = null
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        getSystemService<NotificationManager>()?.cancel(MEDIA_NOTIFICATION.NOTIFICATION_ID)
+        super.onDestroy()
+        Logger.d("Service", "Playback service destroyed")
     }
 
     override fun onTrimMemory(level: Int) {
-        Logger.w("Service", "Simple Media Service Trim Memory Level: $level")
+        super.onTrimMemory(level)
         simpleMediaServiceHandler.mayBeSaveRecentSong()
-    }
-
-    @UnstableApi
-    override fun onTaskRemoved(rootIntent: Intent?) {
-        Logger.w("Service", "Simple Media Service Task Removed")
-        if (simpleMediaServiceHandler.shouldReleaseOnTaskRemoved()) {
-            release()
-            super.onTaskRemoved(rootIntent)
-            // Stop the service gracefully instead of killing the whole process. exitProcess(0) here
-            // murdered every bound client at once — Android Auto/Wear sessions saw an abrupt
-            // disconnect and users read it as "the app crashed" after swiping the task away.
-            stopSelf()
-        }
-    }
-
-    // Can't inject by Koin because it depend on service
-    @UnstableApi
-    private fun provideMediaLibrarySession(
-        service: MediaLibraryService,
-        player: Player,
-        callback: MediaLibrarySession.Callback,
-    ): MediaLibrarySession =
-        MediaLibrarySession
-            .Builder(
-                service,
-                player,
-                callback,
-            ).setId(this.javaClass.name)
-            .setBitmapLoader(coilBitmapLoader)
-            .build()
-
-    private fun isAppInForeground(): Boolean {
-        val appProcessInfo = RunningAppProcessInfo()
-        ActivityManager.getMyMemoryState(appProcessInfo)
-        return appProcessInfo.importance == RunningAppProcessInfo.IMPORTANCE_FOREGROUND
     }
 }

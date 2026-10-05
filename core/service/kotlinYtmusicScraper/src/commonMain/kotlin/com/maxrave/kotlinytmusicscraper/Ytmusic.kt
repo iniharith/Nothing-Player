@@ -33,6 +33,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.ProxyConfig
 import io.ktor.client.plugins.HttpRedirect
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.timeout
 import io.ktor.client.plugins.compression.ContentEncoding
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.defaultRequest
@@ -610,7 +611,10 @@ class Ytmusic {
 
     suspend fun checkForGithubReleaseUpdate() =
         httpClient.get("https://api.github.com/repos/iniharith/Nothing-Player/releases/latest") {
-            contentType(ContentType.Application.Json)
+            header(HttpHeaders.Accept, "application/vnd.github+json")
+            header("X-GitHub-Api-Version", "2022-11-28")
+            userAgent("NothingPlayer")
+            timeout { requestTimeoutMillis = 15_000 }
         }
 
     suspend fun checkForFdroidUpdate() =

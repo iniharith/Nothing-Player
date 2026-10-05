@@ -27,6 +27,7 @@ import com.google.common.util.concurrent.ListenableFuture
 import com.maxrave.common.MEDIA_CUSTOM_COMMAND
 import com.maxrave.logger.Logger
 import com.maxrave.media3.service.SimpleMediaService
+import com.maxrave.media3.service.callback.CAR_BROWSER_CONNECTION_HINT
 
 /**
  * Entry point for the Android Auto templated media experience (Car App
@@ -102,6 +103,8 @@ internal class NothingPlayerCarSession : Session() {
                 .Builder(
                     carContext,
                     SessionToken(carContext, ComponentName(carContext, SimpleMediaService::class.java)),
+                ).setConnectionHints(
+                    Bundle().apply { putBoolean(CAR_BROWSER_CONNECTION_HINT, true) },
                 ).setListener(
                     object : MediaBrowser.Listener {
                         override fun onDisconnected(controller: MediaController) {

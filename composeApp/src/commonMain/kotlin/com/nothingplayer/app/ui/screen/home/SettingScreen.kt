@@ -138,6 +138,7 @@ import com.nothingplayer.app.viewModel.SettingAlertState
 import com.nothingplayer.app.viewModel.SettingBasicAlertState
 import com.nothingplayer.app.viewModel.SettingsViewModel
 import com.nothingplayer.app.viewModel.SharedViewModel
+import com.nothingplayer.app.viewModel.UpdateViewModel
 import com.mikepenz.aboutlibraries.entity.Library
 import com.mikepenz.aboutlibraries.ui.compose.ChipColors
 import com.mikepenz.aboutlibraries.ui.compose.LibraryDefaults
@@ -179,6 +180,14 @@ import nothingplayer.composeapp.generated.resources.audio
 import nothingplayer.composeapp.generated.resources.author
 import nothingplayer.composeapp.generated.resources.auto_backup
 import nothingplayer.composeapp.generated.resources.auto_backup_description
+import nothingplayer.composeapp.generated.resources.auto_check_for_update
+import nothingplayer.composeapp.generated.resources.auto_check_for_update_description
+import nothingplayer.composeapp.generated.resources.check_for_update
+import nothingplayer.composeapp.generated.resources.checking_for_update
+import nothingplayer.composeapp.generated.resources.github_update_description
+import nothingplayer.composeapp.generated.resources.no_update
+import nothingplayer.composeapp.generated.resources.update_check_failed
+import nothingplayer.composeapp.generated.resources.update_available
 import nothingplayer.composeapp.generated.resources.backup
 import nothingplayer.composeapp.generated.resources.backup_downloaded
 import nothingplayer.composeapp.generated.resources.backup_downloaded_description
@@ -253,8 +262,6 @@ import nothingplayer.composeapp.generated.resources.invalid_language_code
 import nothingplayer.composeapp.generated.resources.invalid_port
 import nothingplayer.composeapp.generated.resources.keep_backups
 import nothingplayer.composeapp.generated.resources.keep_backups_format
-import nothingplayer.composeapp.generated.resources.keep_service_alive
-import nothingplayer.composeapp.generated.resources.keep_service_alive_description
 import nothingplayer.composeapp.generated.resources.keep_your_youtube_playlist_offline
 import nothingplayer.composeapp.generated.resources.keep_your_youtube_playlist_offline_description
 import nothingplayer.composeapp.generated.resources.kill_service_on_exit
@@ -378,6 +385,9 @@ fun SettingScreen(
     viewModel: SettingsViewModel = koinViewModel(),
     sharedViewModel: SharedViewModel = koinInject(),
 ) {
+    val updateViewModel: UpdateViewModel = koinInject()
+    val updateState by updateViewModel.state.collectAsStateWithLifecycle()
+    val autoCheckForUpdates by updateViewModel.autoCheckForUpdates.collectAsStateWithLifecycle()
     val platformContext = LocalPlatformContext.current
     val pl = com.mohamedrejeb.calf.core.LocalPlatformContext.current
     val localDensity = LocalDensity.current
@@ -456,6 +466,7 @@ fun SettingScreen(
     val saveLastPlayed by remember { viewModel.saveRecentSongAndQueue.map { it == TRUE } }.collectAsStateWithLifecycle(initialValue = false)
     val killServiceOnExit by remember { viewModel.killServiceOnExit.map { it == TRUE } }.collectAsStateWithLifecycle(initialValue = true)
     val mainLyricsProvider by viewModel.mainLyricsProvider.collectAsStateWithLifecycle()
+    val androidAutoLyrics by viewModel.androidAutoLyrics.collectAsStateWithLifecycle()
     val lyricsOffset by viewModel.lyricsOffset.collectAsStateWithLifecycle()
     val youtubeSubtitleLanguage by viewModel.youtubeSubtitleLanguage.collectAsStateWithLifecycle()
     val spotifyLoggedIn by viewModel.spotifyLogIn.collectAsStateWithLifecycle()
@@ -500,7 +511,6 @@ fun SettingScreen(
     val lastfmUsername by viewModel.lastfmUsername.collectAsStateWithLifecycle()
     val lastfmScrobbleEnabled by viewModel.lastfmScrobbleEnabled.collectAsStateWithLifecycle()
     val richPresenceEnabled by viewModel.richPresenceEnabled.collectAsStateWithLifecycle()
-    val keepServiceAlive by viewModel.keepServiceAlive.collectAsStateWithLifecycle()
 
     val crossfadeEnabled by viewModel.crossfadeEnabled.collectAsStateWithLifecycle()
     val crossfadeDuration by viewModel.crossfadeDuration.collectAsStateWithLifecycle()
@@ -1070,11 +1080,6 @@ fun SettingScreen(
                         subtitle = stringResource(Res.string.kill_service_on_exit_description),
                         switch = (killServiceOnExit to { viewModel.setKillServiceOnExit(it) }),
                     )
-                    SettingItem(
-                        title = stringResource(Res.string.keep_service_alive),
-                        subtitle = stringResource(Res.string.keep_service_alive_description),
-                        switch = (keepServiceAlive to { viewModel.setKeepServiceAlive(it) }),
-                    )
                 }
             }
         }
@@ -1226,6 +1231,12 @@ fun SettingScreen(
                             ),
                         )
                     },
+                )
+
+                SettingItem(
+                    title = "Android Auto lyrics",
+                    subtitle = "Show the current lyric as the song name and the next line as the artist name",
+                    switch = (androidAutoLyrics to { viewModel.setAndroidAutoLyrics(it) }),
                 )
 
                 SettingItem(
@@ -2254,6 +2265,23 @@ fun SettingScreen(
                     onClick = {
                         navController.navigate(CreditDestination)
                     },
+                )
+                SettingItem(
+                    title = stringResource(Res.string.auto_check_for_update),
+                    subtitle = stringResource(Res.string.auto_check_for_update_description),
+                    switch = autoCheckForUpdates to updateViewModel::setAutoCheckForUpdates,
+                )
+                SettingItem(
+                    title = stringResource(Res.string.check_for_update),
+                    subtitle = when {
+                        updateState.isChecking -> stringResource(Res.string.checking_for_update)
+                        updateState.checkedManually && updateState.error -> stringResource(Res.string.update_check_failed)
+                        updateState.hasUpdate -> stringResource(Res.string.update_available)
+                        updateState.checkedManually -> stringResource(Res.string.no_update)
+                        else -> stringResource(Res.string.github_update_description)
+                    },
+                    isEnable = !updateState.isChecking,
+                    onClick = { updateViewModel.checkForUpdates(manual = true) },
                 )
                 SettingItem(
                     title = stringResource(Res.string.author),

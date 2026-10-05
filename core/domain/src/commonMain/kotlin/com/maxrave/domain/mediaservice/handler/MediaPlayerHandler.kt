@@ -86,6 +86,9 @@ interface MediaPlayerHandler {
 
     fun setQueueData(queueData: QueueData.Data)
 
+    /** Populate a complete queue before the media session applies its items to the player. */
+    fun setPlaybackResumptionQueue(queueData: QueueData.Data) = setQueueData(queueData)
+
     fun getCurrentMediaItem(): GenericMediaItem?
 
     // Track operations
@@ -141,6 +144,17 @@ interface MediaPlayerHandler {
     fun startBufferedUpdate()
 
     fun stopBufferedUpdate()
+
+    /** Stops the current session while retaining the saved queue for a later resume. */
+    fun stopPlaybackSession() {
+        mayBeSaveRecentSong(runBlocking = true)
+        mayBeSavePlaybackState()
+        player.pause()
+        player.stop()
+        clearMediaItems()
+        stopProgressUpdate()
+        stopBufferedUpdate()
+    }
 
     // Settings
     fun mayBeNormalizeVolume()

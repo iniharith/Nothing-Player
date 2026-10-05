@@ -51,6 +51,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -70,6 +72,7 @@ import com.nothingplayer.app.extension.copy
 import com.nothingplayer.app.ui.component.AppBottomNavigationBar
 import com.nothingplayer.app.ui.component.AppNavigationRail
 import com.nothingplayer.app.ui.component.LiquidGlassAppBottomNavigationBar
+import com.nothingplayer.app.ui.component.UpdateDialog
 import com.nothingplayer.app.ui.icon.ArrowForwardIos
 import com.nothingplayer.app.ui.icon.SimpIcons
 import com.nothingplayer.app.ui.navigation.destination.home.NotificationDestination
@@ -87,6 +90,7 @@ import com.nothingplayer.app.ui.theme.parseThemeColorHex
 import com.nothingplayer.app.ui.theme.fontFamily
 import com.nothingplayer.app.ui.theme.typo
 import com.nothingplayer.app.viewModel.SharedViewModel
+import com.nothingplayer.app.viewModel.UpdateViewModel
 import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.materials.HazeMaterials
@@ -108,6 +112,14 @@ import kotlin.time.ExperimentalTime
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class, ExperimentalFoundationApi::class)
 @Composable
 fun App(viewModel: SharedViewModel = koinInject()) {
+    val updateViewModel: UpdateViewModel = koinInject()
+    val updateState by updateViewModel.state.collectAsStateWithLifecycle()
+    LifecycleEventEffect(Lifecycle.Event.ON_START) {
+        updateViewModel.checkForUpdates()
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+        updateViewModel.cancelAutomaticCheck()
+    }
     val windowSize = currentWindowAdaptiveInfo().windowSizeClass
     val navController = rememberNavController()
 
@@ -321,6 +333,11 @@ fun App(viewModel: SharedViewModel = koinInject()) {
         themeColorSource = themeColorSource,
         customThemeColor = parseThemeColorHex(customThemeColorHex),
     ) {
+        if (!showNotificationPermissionDialog) {
+            updateState.availableUpdate?.let { update ->
+                UpdateDialog(update, updateViewModel::dismissUpdate)
+            }
+        }
         // Backdrop base must match the theme: white page → white glass, dark/AMOLED → black glass.
         // Read inside AppTheme so MaterialTheme reflects the resolved scheme (light background is #FFFFFF).
         val backdrop =

@@ -209,6 +209,7 @@ compose.desktop {
                     libs.versions.version.name
                         .get()
                         .removeSuffix("-hf")
+                        .let { if (it.count { char -> char == '.' } == 1) "$it.0" else it }
                 iconFile.set(rootDir.resolve("composeApp/icon/circle_app_icon.ico"))
             }
             linux {

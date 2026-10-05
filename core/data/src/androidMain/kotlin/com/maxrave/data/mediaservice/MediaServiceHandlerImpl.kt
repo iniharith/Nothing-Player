@@ -95,6 +95,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import org.koin.mp.KoinPlatform.getKoin
@@ -124,43 +126,6 @@ internal class MediaServiceHandlerImpl(
      * machine-gunning through every item as a chain of instant skips.
      */
     private var lastAutoSkipOnErrorAt = 0L
-
-    private var preloadJob: Job? = null
-    private var preloadedNextMediaId: String? = null
-
-    /**
-     * Resolves the NEXT queue item's stream URL in the background as soon as the current track is
-     * ready. [StreamRepository.getStream] persists the NewFormatEntity row before emitting, so the
-     * later real open hits a fresh DB row instead of paying the full WEB_REMIX request +
-     * signature-decode + probe chain — track changes start almost instantly.
-     */
-    private fun mayBePreloadNextStream() {
-        val nextIndex = player.currentMediaItemIndex + 1
-        if (nextIndex >= player.mediaItemCount) return
-        val nextId =
-            player.getMediaItemAt(nextIndex)?.mediaId?.takeIf {
-                it.isNotBlank() && !it.contains(MERGING_DATA_TYPE.VIDEO)
-            } ?: return
-        if (nextId == preloadedNextMediaId) return
-        preloadedNextMediaId = nextId
-        preloadJob?.cancel()
-        preloadJob =
-            backgroundScope.launch(Dispatchers.IO) {
-                runCatching {
-                    val existing = streamRepository.getNewFormat(nextId).firstOrNull()
-                    if (existing != null && existing.expiredTime > now()) return@runCatching
-                    streamRepository
-                        .getStream(
-                            dataStoreManager,
-                            nextId,
-                            isDownloading = false,
-                            isVideo = false,
-                        ).collect {}
-                }.onFailure {
-                    Logger.w(TAG, "Preload next stream failed: ${it.message}")
-                }
-            }
-    }
 
     @Volatile
     private var discordRPC: DiscordRPC? = null
@@ -270,6 +235,14 @@ internal class MediaServiceHandlerImpl(
 
     private var loadJob: Job? = null
 
+    private var relatedJob: Job? = null
+
+    private var loadMoreJob: Job? = null
+
+    private val recentSaveRevision = AtomicLong()
+    private val recentSaveMutex = Mutex()
+    private var stoppingPlaybackSession = false
+
     private var songEntityJob: Job? = null
 
     private var jobWatchtime: Job? = null
@@ -362,7 +335,8 @@ internal class MediaServiceHandlerImpl(
                         },
                 )
         }
-        mayBeRestoreQueue()
+        // Restore only after an explicit playback/resumption request. Preparing a saved
+        // queue here starts network work and creates a media card just by opening the app.
         coroutineScope.launch {
             val controlStateJob =
                 launch {
@@ -873,6 +847,7 @@ internal class MediaServiceHandlerImpl(
     }
 
     override fun startBufferedUpdate() {
+        bufferedJob?.cancel()
         bufferedJob =
             coroutineScope.launch {
                 while (true) {
@@ -943,9 +918,7 @@ internal class MediaServiceHandlerImpl(
             }
 
             PlayerEvent.Stop -> {
-                stopProgressUpdate()
-                player.stop()
-                _nowPlayingState.value = NowPlayingTrackState.initial()
+                stopPlaybackSession()
             }
 
             is PlayerEvent.UpdateProgress -> {
@@ -1139,6 +1112,7 @@ internal class MediaServiceHandlerImpl(
         mediaItem: GenericMediaItem,
         playWhenReady: Boolean,
     ) {
+        stoppingPlaybackSession = false
         player.clearMediaItems()
         player.setMediaItem(mediaItem)
         player.prepare()
@@ -1227,8 +1201,19 @@ internal class MediaServiceHandlerImpl(
         }
     }
 
+    private fun cancelQueueRequests() {
+        val wasBuildingQueue = relatedJob?.isActive == true || loadMoreJob?.isActive == true
+        relatedJob?.cancel()
+        relatedJob = null
+        loadMoreJob?.cancel()
+        loadMoreJob = null
+        if (wasBuildingQueue && _queueData.value.queueState == QueueData.StateSource.STATE_INITIALIZING) {
+            _queueData.update { it.copy(queueState = QueueData.StateSource.STATE_INITIALIZED) }
+        }
+    }
+
     override fun loadMore() {
-        if (queueData.value.queueState == QueueData.StateSource.STATE_INITIALIZING) return
+        if (queueData.value.queueState == QueueData.StateSource.STATE_INITIALIZING || loadMoreJob?.isActive == true) return
         // Separate local and remote data
         // Local Add Prefix to PlaylistID to differentiate between local and remote
         // Local: LC-PlaylistID
@@ -1238,7 +1223,7 @@ internal class MediaServiceHandlerImpl(
         Logger.w("Check loadMore", continuation.toString())
         if (continuation != null) {
             if (playlistId.startsWith(LOCAL_PLAYLIST_ID)) {
-                coroutineScope.launch {
+                loadMoreJob = coroutineScope.launch {
                     _queueData.update {
                         it.copy(
                             queueState = QueueData.StateSource.STATE_INITIALIZING,
@@ -1414,7 +1399,7 @@ internal class MediaServiceHandlerImpl(
                     }
                 }
             } else {
-                coroutineScope.launch {
+                loadMoreJob = coroutineScope.launch {
                     _queueData.update {
                         it.copy(
                             queueState = QueueData.StateSource.STATE_INITIALIZING,
@@ -1492,8 +1477,9 @@ internal class MediaServiceHandlerImpl(
 
     override fun getRelated(videoId: String) {
         if (queueData.value.queueState == QueueData.StateSource.STATE_INITIALIZING) return
-        coroutineScope.launch {
-            songRepository.getRelatedData(videoId).collect { response ->
+        relatedJob?.cancel()
+        relatedJob = coroutineScope.launch {
+            songRepository.getRelatedData(videoId).cancellable().collect { response ->
                 when (response) {
                     is Resource.Success -> {
                         loadMoreCatalog(response.data?.first?.toCollection(arrayListOf()) ?: arrayListOf())
@@ -1578,6 +1564,12 @@ internal class MediaServiceHandlerImpl(
 
     override fun reset() {
         _queueData.value = QueueData()
+    }
+
+    override fun setPlaybackResumptionQueue(queueData: QueueData.Data) {
+        stoppingPlaybackSession = false
+        cancelQueueRequests()
+        _queueData.value = QueueData(queueState = QueueData.StateSource.STATE_INITIALIZED, data = queueData)
     }
 
     override suspend fun load(
@@ -2100,6 +2092,7 @@ internal class MediaServiceHandlerImpl(
             showToast(ToastType.ExplicitContent)
             return
         }
+        cancelQueueRequests()
         songRepository.insertSong(track.toSongEntity()).singleOrNull()?.let {
             Logger.d(TAG, "Inserted song: ${track.title}")
         }
@@ -2124,39 +2117,38 @@ internal class MediaServiceHandlerImpl(
     override fun getProgress(): Long = player.currentPosition
 
     override fun mayBeSaveRecentSong(runBlocking: Boolean) {
+        if (stoppingPlaybackSession) return
+        // Read one snapshot before DataStore/Room suspend or teardown clears the player.
+        // SongEntity can still describe the previous track while the new metadata loads.
+        val mediaItem = player.currentMediaItem ?: return
+        val videoId = mediaItem.mediaId.removePrefix(MERGING_DATA_TYPE.VIDEO).takeIf { it.isNotBlank() } ?: return
+        val queue = _queueData.value
+        if (queue.queueState == QueueData.StateSource.STATE_INITIALIZING || queue.queueState == QueueData.StateSource.STATE_ERROR) return
+        val position = player.contentPosition.coerceAtLeast(0L)
+        val tracks = queue.data.listTracks.toList()
+        val currentTrack = tracks.firstOrNull { it.videoId == videoId }
+            ?: queue.data.firstPlayedTrack?.takeIf { it.videoId == videoId }
+            ?: mediaItem.toSongEntity().copy(videoId = videoId).toTrack()
+        val savedTracks = if (tracks.any { it.videoId == videoId }) tracks else listOf(currentTrack) + tracks
+        val playlistName = queue.data.playlistName.orEmpty()
+        val revision = recentSaveRevision.incrementAndGet()
         val unit =
             suspend {
-                if (dataStoreManager.saveRecentSongAndQueue.first() == TRUE) {
-                    // Skip while the playing song is unknown or the queue is mid-rebuild:
-                    // updateCatalog clears listTracks and re-inserts the current track only at
-                    // the end, so saving in that window persists a queue missing the current
-                    // track (plus a blank media id), which desyncs the next restore.
-                    val videoId = nowPlayingState.value.songEntity?.videoId
-                    if (videoId != null && queueData.value.queueState == QueueData.StateSource.STATE_INITIALIZED) {
-                        dataStoreManager.saveRecentSong(
-                            videoId,
-                            player.contentPosition,
-                        )
-                        dataStoreManager.setPlaylistFromSaved(queueData.value.data.playlistName ?: "")
-                        Logger.d(
-                            "Check saved",
-                            player.currentMediaItem
-                                ?.metadata
-                                ?.title
-                                .toString(),
-                        )
-                        val temp: ArrayList<Track> = ArrayList()
-                        temp.clear()
-                        temp.addAll(_queueData.value.data.listTracks)
-                        Logger.w("Check recover queue", temp.toString())
-                        songRepository.recoverQueue(temp)
+                recentSaveMutex.withLock {
+                    if (dataStoreManager.saveRecentSongAndQueue.first() == TRUE && revision == recentSaveRevision.get()) {
+                        dataStoreManager.saveRecentSong(videoId, position)
+                        dataStoreManager.setPlaylistFromSaved(playlistName)
+                        songRepository.recoverQueue(savedTracks)
+                        Logger.d("Check saved", mediaItem.metadata.title.orEmpty())
                     }
                 }
             }
         if (runBlocking) {
-            runBlocking { unit() }
+            // All save lock holders run on IO, so the final synchronous save can
+            // wait for an older write without blocking its continuation on Main.
+            runBlocking(Dispatchers.IO) { unit() }
         } else {
-            coroutineScope.launch { unit() }
+            coroutineScope.launch(Dispatchers.IO) { unit() }
         }
     }
 
@@ -2167,10 +2159,16 @@ internal class MediaServiceHandlerImpl(
      * media id + position are what [mayBeRestoreQueue] reads to resume after a process kill.
      */
     private fun mayBeSaveRecentPosition() {
-        coroutineScope.launch {
-            if (dataStoreManager.saveRecentSongAndQueue.first() == TRUE) {
-                val videoId = nowPlayingState.value.songEntity?.videoId ?: return@launch
-                dataStoreManager.saveRecentSong(videoId, player.contentPosition)
+        if (stoppingPlaybackSession) return
+        val mediaItem = player.currentMediaItem ?: return
+        val videoId = mediaItem.mediaId.removePrefix(MERGING_DATA_TYPE.VIDEO).takeIf { it.isNotBlank() } ?: return
+        val position = player.contentPosition.coerceAtLeast(0L)
+        val revision = recentSaveRevision.incrementAndGet()
+        coroutineScope.launch(Dispatchers.IO) {
+            recentSaveMutex.withLock {
+                if (dataStoreManager.saveRecentSongAndQueue.first() == TRUE && revision == recentSaveRevision.get()) {
+                    dataStoreManager.saveRecentSong(videoId, position)
+                }
             }
         }
     }
@@ -2325,6 +2323,46 @@ internal class MediaServiceHandlerImpl(
             dataStoreManager.killServiceOnExit.first() == TRUE
         }
 
+    override fun stopPlaybackSession() {
+        if (stoppingPlaybackSession) return
+        mayBeSaveRecentSong(runBlocking = true)
+        mayBeSavePlaybackState()
+        // Pause/clear callbacks arrive asynchronously. They must not overwrite the
+        // complete saved queue with the empty live queue during teardown.
+        stoppingPlaybackSession = true
+        // Cancel work that could repopulate the playlist after the session has stopped.
+        cancelQueueRequests()
+        loadJob?.cancel()
+        getSkipSegmentsJob?.cancel()
+        getFormatJob?.cancel()
+        songEntityJob?.cancel()
+        getDataOfNowPlayingTrackStateJob?.cancel()
+        jobWatchtime?.cancel()
+        volumeNormalizationJob?.cancel()
+        toggleLikeJob?.cancel()
+        sleepStop()
+        stopProgressUpdate()
+        stopBufferedUpdate()
+        // Clear queue state first so the null-item transition cannot load more tracks.
+        _queueData.value = QueueData()
+        player.pause()
+        player.stop()
+        player.clearMediaItems()
+        updateNotificationJob?.cancel()
+        _format.value = null
+        _simpleMediaState.value = SimpleMediaState.Initial
+        _nowPlayingState.value = NowPlayingTrackState.initial()
+        try {
+            loudnessEnhancer?.release()
+            loudnessEnhancer = null
+            secondLoudnessEnhancer?.release()
+            secondLoudnessEnhancer = null
+        } catch (e: Exception) {
+            Logger.w(TAG, "Audio effect cleanup: ${e.message}")
+        }
+        // Keep the DI singleton and its collectors usable when the service is recreated.
+    }
+
     override fun release() {
         Logger.w("ServiceHandler", "Starting release process")
         try {
@@ -2424,7 +2462,6 @@ internal class MediaServiceHandlerImpl(
             PlayerConstants.STATE_READY -> {
                 Logger.d(TAG, "onPlaybackStateChanged: Ready")
                 _simpleMediaState.value = SimpleMediaState.Ready(player.duration)
-                mayBePreloadNextStream()
             }
 
             else -> {

@@ -88,7 +88,7 @@ val repositoryModule =
         }
 
         single<StreamRepository>(createdAtStart = true) {
-            StreamRepositoryImpl(get(), get())
+            StreamRepositoryImpl(get(), get(), get(named(SERVICE_SCOPE)))
         }
 
         single<UpdateRepository>(createdAtStart = true) {

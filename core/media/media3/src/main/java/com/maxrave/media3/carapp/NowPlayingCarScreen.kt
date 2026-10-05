@@ -4,6 +4,7 @@ import androidx.car.app.CarContext
 import androidx.car.app.Screen
 import androidx.car.app.media.model.MediaPlaybackTemplate
 import androidx.car.app.model.Action
+import androidx.car.app.model.CarColor
 import androidx.car.app.model.CarIcon
 import androidx.car.app.model.Header
 import androidx.car.app.model.Template
@@ -31,6 +32,8 @@ internal class NowPlayingCarScreen(
     carContext: CarContext,
 ) : Screen(carContext),
     KoinComponent {
+    private val settings: com.maxrave.domain.manager.DataStoreManager by inject()
+    private var lyricsEnabled = false
     private val handler: MediaPlayerHandler by inject()
     private val screenScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -42,6 +45,12 @@ internal class NowPlayingCarScreen(
                 }
             },
         )
+        screenScope.launch {
+            settings.androidAutoLyrics.collect {
+                lyricsEnabled = it == com.maxrave.domain.manager.DataStoreManager.TRUE
+                invalidate()
+            }
+        }
         screenScope.launch {
             handler.queueData.collect { invalidate() }
         }
@@ -66,9 +75,9 @@ internal class NowPlayingCarScreen(
                         CarIcon
                             .Builder(
                                 IconCompat.createWithResource(carContext, R.drawable.ic_car_lyrics),
-                            ).build(),
+                            ).setTint(if (lyricsEnabled) CarColor.GREEN else CarColor.DEFAULT).build(),
                     ).setOnClickListener {
-                        screenManager.push(LyricsCarScreen(carContext))
+                        screenScope.launch { settings.setAndroidAutoLyrics(!lyricsEnabled) }
                     }.build(),
             )
             .addEndHeaderAction(

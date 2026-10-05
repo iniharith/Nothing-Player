@@ -7,7 +7,6 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
 import androidx.annotation.OptIn
-import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -25,11 +24,7 @@ import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.NoOpCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.datasource.okhttp.OkHttpDataSource
-import androidx.media3.exoplayer.DefaultLoadControl
-import androidx.media3.exoplayer.DefaultLoadControl.DEFAULT_MAX_BUFFER_MS
-import androidx.media3.exoplayer.DefaultLoadControl.DEFAULT_MIN_BUFFER_MS
 import androidx.media3.exoplayer.DefaultRenderersFactory
-import androidx.media3.exoplayer.LoadControl
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.audio.SilenceSkippingAudioProcessor
@@ -64,6 +59,7 @@ import com.maxrave.logger.Logger
 import com.maxrave.media3.cast.CastHandoffManager
 import com.maxrave.media3.cast.CastStreamResolver
 import com.maxrave.media3.exoplayer.CrossfadeExoPlayerAdapter
+import com.maxrave.media3.exoplayer.StreamUrlCache
 import com.maxrave.media3.extension.isFullyCached
 import com.maxrave.media3.repository.CacheRepositoryImpl
 import com.maxrave.media3.service.SimpleMediaService
@@ -76,10 +72,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
-import kotlinx.coroutines.flow.lastOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.datetime.LocalDateTime
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import org.koin.android.ext.koin.androidApplication
@@ -90,7 +84,6 @@ import org.koin.dsl.module
 import org.nothingplayer.cast.initCast
 import org.nothingplayer.cast.wrapWithCastPlayer
 import java.net.Proxy
-import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration.Companion.seconds
 
 /**
@@ -166,8 +159,11 @@ private val mediaServiceModule =
                 get(),
                 get(named(SERVICE_SCOPE)),
                 get(),
+                get(),
             )
         }
+
+        single { StreamUrlCache() }
 
         single<DefaultRenderersFactory>(createdAtStart = true) {
             provideRendererFactory(androidContext())
@@ -196,6 +192,7 @@ private val mediaServiceModule =
                 mediaSourceFactory = get(),
                 audioAttributes = get(),
                 streamRepository = get(),
+                streamUrlCache = get(),
             )
         }
 
@@ -222,6 +219,7 @@ private val mediaServiceModule =
                 get<PlaylistRepository>(),
                 get<HomeRepository>(),
                 get<StreamRepository>(),
+                get<DataStoreManager>(),
             )
         }
 
@@ -234,21 +232,12 @@ private val mediaServiceModule =
         }
     }
 
-@UnstableApi
-private data class ResolvedStream(
-    val uri: String,
-    val expiresAt: LocalDateTime,
-)
-
 /**
  * Conservative TTL for stream URLs resolved through [StreamRepository.getStream], which only
  * returns the raw URL string without its real expiry. YouTube playback URLs normally live ~6h;
  * 30 minutes is well inside that while still covering a full listening session per track.
  */
 private const val RESOLVED_STREAM_TTL_SECONDS = 1800L
-
-/** Upper bound for the in-memory resolve cache before a sweep of expired entries runs. */
-private const val RESOLVED_STREAM_CACHE_MAX_ENTRIES = 128
 
 private fun provideResolvingDataSourceFactory(
     cacheDataSourceFactory: CacheDataSource.Factory,
@@ -257,6 +246,7 @@ private fun provideResolvingDataSourceFactory(
     dataStoreManager: DataStoreManager,
     streamRepository: StreamRepository,
     coroutineScope: CoroutineScope,
+    resolvedStreams: StreamUrlCache,
 ): DataSource.Factory {
     val chunkLength = 10 * 512 * 1024L
     // In-memory stream resolution cache. ResolvingDataSource re-opens the DataSpec at every
@@ -265,7 +255,6 @@ private fun provideResolvingDataSourceFactory(
     // map keyed by videoId turns chunk 2..N into pure memory lookups. Entries expire with the
     // upstream URL; a fully broken entry only costs one playback error before the normal
     // resolve path takes over again.
-    val resolvedStreams = ConcurrentHashMap<String, ResolvedStream>()
     return ResolvingDataSource.Factory(cacheDataSourceFactory) { dataSpec ->
         val mediaId = dataSpec.key ?: error("No media id")
         Logger.w("Stream", mediaId)
@@ -318,39 +307,23 @@ private fun provideResolvingDataSourceFactory(
             // cache that shrinks under us falls back to resolving a real URL.
             return@Factory dataSpec.subrange(dataSpec.uriPositionOffset, chunkLength)
         }
-        val plainId =
-            if (mediaId.contains(MERGING_DATA_TYPE.VIDEO)) {
-                mediaId.removePrefix(MERGING_DATA_TYPE.VIDEO)
-            } else {
-                mediaId
-            }
-        resolvedStreams[plainId]?.takeIf { it.expiresAt > now() }?.let { cached ->
+        resolvedStreams[mediaId]?.let { cached ->
             Logger.d("Stream", "Resolved $mediaId from memory cache")
-            return@Factory dataSpec.withUri(cached.uri.toUri()).subrange(dataSpec.uriPositionOffset, chunkLength)
-        }
-        if (resolvedStreams.size > RESOLVED_STREAM_CACHE_MAX_ENTRIES) {
-            // Expired entries are re-resolved on demand anyway; a periodic sweep keeps the map
-            // bounded during very long sessions without any scheduling machinery.
-            resolvedStreams.entries.removeIf { it.value.expiresAt <= now() }
+            return@Factory dataSpec.withUri(cached.toUri()).subrange(dataSpec.uriPositionOffset, chunkLength)
         }
         var dataSpecReturn: DataSpec = dataSpec
         var resolved = false
         runBlocking(Dispatchers.IO) {
             if (mediaId.contains(MERGING_DATA_TYPE.VIDEO)) {
                 val id = mediaId.removePrefix(MERGING_DATA_TYPE.VIDEO)
-                streamRepository.getNewFormat(id).lastOrNull()?.let {
+                (streamRepository.getNewFormat(mediaId).firstOrNull() ?: streamRepository.getNewFormat(id).firstOrNull())?.let {
                     val videoUrl = it.videoUrl
                     if (videoUrl != null && it.expiredTime > now()) {
-                        Logger.d("Stream", videoUrl)
                         Logger.w("Stream", "Video from format")
-                        val is403Url = streamRepository.is403Url(videoUrl).firstOrNull() != false
-                        Logger.d("Stream", "is 403 $is403Url")
-                        if (!is403Url) {
-                            dataSpecReturn = dataSpec.withUri(videoUrl.toUri()).subrange(dataSpec.uriPositionOffset, chunkLength)
-                            resolvedStreams[id] = ResolvedStream(videoUrl, it.expiredTime)
-                            resolved = true
-                            return@runBlocking
-                        }
+                        dataSpecReturn = dataSpec.withUri(videoUrl.toUri()).subrange(dataSpec.uriPositionOffset, chunkLength)
+                        resolvedStreams.put(mediaId, videoUrl, it.expiredTime)
+                        resolved = true
+                        return@runBlocking
                     }
                 }
                 streamRepository
@@ -359,28 +332,24 @@ private fun provideResolvingDataSourceFactory(
                         id,
                         isDownloading = false,
                         isVideo = true,
-                    ).lastOrNull()
+                    ).firstOrNull()
                     ?.let {
-                        Logger.d("Stream", it)
                         Logger.w("Stream", "Video")
                         dataSpecReturn = dataSpec.withUri(it.toUri()).subrange(dataSpec.uriPositionOffset, chunkLength)
-                        resolvedStreams[id] = ResolvedStream(it, now().plusSeconds(RESOLVED_STREAM_TTL_SECONDS))
+                        resolvedStreams.put(mediaId, it, now().plusSeconds(RESOLVED_STREAM_TTL_SECONDS))
                         resolved = true
                     }
             } else {
-                streamRepository.getNewFormat(mediaId).lastOrNull()?.let {
+                streamRepository.getNewFormat(mediaId).firstOrNull()?.let {
                     val audioUrl = it.audioUrl
                     if (audioUrl != null && it.expiredTime > now()) {
-                        Logger.d("Stream", audioUrl)
                         Logger.w("Stream", "Audio from format")
-                        val is403Url = streamRepository.is403Url(audioUrl).firstOrNull() != false
-                        Logger.d("Stream", "is 403 $is403Url")
-                        if (!is403Url) {
-                            dataSpecReturn = dataSpec.withUri(audioUrl.toUri()).subrange(dataSpec.uriPositionOffset, chunkLength)
-                            resolvedStreams[mediaId] = ResolvedStream(audioUrl, it.expiredTime)
-                            resolved = true
-                            return@runBlocking
-                        }
+                        // The media open verifies the URL. A separate HTTP probe costs a
+                        // round trip on every track; source-error recovery invalidates it.
+                        dataSpecReturn = dataSpec.withUri(audioUrl.toUri()).subrange(dataSpec.uriPositionOffset, chunkLength)
+                        resolvedStreams.put(mediaId, audioUrl, it.expiredTime)
+                        resolved = true
+                        return@runBlocking
                     }
                 }
                 streamRepository
@@ -389,12 +358,11 @@ private fun provideResolvingDataSourceFactory(
                         mediaId,
                         isDownloading = false,
                         isVideo = false,
-                    ).lastOrNull()
+                    ).firstOrNull()
                     ?.let {
-                        Logger.d("Stream", it)
                         Logger.w("Stream", "Audio")
                         dataSpecReturn = dataSpec.withUri(it.toUri()).subrange(dataSpec.uriPositionOffset, chunkLength)
-                        resolvedStreams[mediaId] = ResolvedStream(it, now().plusSeconds(RESOLVED_STREAM_TTL_SECONDS))
+                        resolvedStreams.put(mediaId, it, now().plusSeconds(RESOLVED_STREAM_TTL_SECONDS))
                         resolved = true
                     }
             }
@@ -434,6 +402,7 @@ private fun provideMediaSourceFactory(
     streamRepository: StreamRepository,
     dataStoreManager: DataStoreManager,
     coroutineScope: CoroutineScope,
+    streamUrlCache: StreamUrlCache,
 ): DefaultMediaSourceFactory =
     DefaultMediaSourceFactory(
         provideResolvingDataSourceFactory(
@@ -456,6 +425,7 @@ private fun provideMediaSourceFactory(
             dataStoreManager,
             streamRepository,
             coroutineScope,
+            streamUrlCache,
         ),
         provideExtractorFactory(),
     )
@@ -468,6 +438,7 @@ private fun provideMergingMediaSource(
     streamRepository: StreamRepository,
     coroutineScope: CoroutineScope,
     dataStoreManager: DataStoreManager,
+    streamUrlCache: StreamUrlCache,
 ): MergingMediaSourceFactory =
     MergingMediaSourceFactory(
         provideMediaSourceFactory(
@@ -477,6 +448,7 @@ private fun provideMergingMediaSource(
             streamRepository,
             dataStoreManager,
             coroutineScope,
+            streamUrlCache,
         ),
         dataStoreManager,
     )
@@ -546,19 +518,6 @@ private fun provideCacheDataSource(
         .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
 
 @UnstableApi
-private fun provideLoadControl(): LoadControl =
-    DefaultLoadControl
-        .Builder()
-        .setBufferDurationsMs(
-            DEFAULT_MIN_BUFFER_MS * 4,
-            DEFAULT_MAX_BUFFER_MS * 4,
-            // bufferForPlaybackMs=
-            0,
-            // bufferForPlaybackAfterRebufferMs=
-            0,
-        ).build()
-
-@UnstableApi
 private fun provideAudioAttributes(): AudioAttributes =
     AudioAttributes
         .Builder()
@@ -601,14 +560,13 @@ fun startService(
     serviceConnection: ServiceConnection,
 ) {
     val intent = Intent(context, SimpleMediaService::class.java)
-    try {
-        context.startService(intent)
-    } catch (e: IllegalStateException) {
-        // BackgroundServiceStartNotAllowedException (Android 12+)
-        ContextCompat.startForegroundService(context, intent)
+    // Binding keeps an idle session alive only while an app/controller needs it.
+    // MediaLibraryService starts its foreground lifetime when playback actually starts.
+    if (context.bindService(intent, serviceConnection, BIND_AUTO_CREATE)) {
+        Logger.d("Service", "Service bound")
+    } else {
+        Logger.e("Service", "Could not bind media service")
     }
-    context.bindService(intent, serviceConnection, BIND_AUTO_CREATE)
-    Logger.d("Service", "Service started")
 }
 
 @OptIn(UnstableApi::class)

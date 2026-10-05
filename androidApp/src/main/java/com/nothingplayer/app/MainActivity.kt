@@ -83,10 +83,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onStop() {
-        super.onStop()
         if (shouldUnbind) {
             unbindService(serviceConnection)
+            shouldUnbind = false
+            mBound = false
         }
+        super.onStop()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -249,6 +251,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startMusicService() {
+        if (shouldUnbind) return
 //        mediaPlayerHandler.startMediaService(this, serviceConnection)
         com.maxrave.media3.di
             .startService(this@MainActivity, serviceConnection)

@@ -19,11 +19,13 @@ import com.nothingplayer.app.viewModel.RecentlySongsViewModel
 import com.nothingplayer.app.viewModel.SearchViewModel
 import com.nothingplayer.app.viewModel.SettingsViewModel
 import com.nothingplayer.app.viewModel.SharedViewModel
+import com.nothingplayer.app.viewModel.UpdateViewModel
 import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
 
 val viewModelModule =
     module {
+        single { UpdateViewModel(get(), get()) }
         single {
             SharedViewModel(
                 get(),
