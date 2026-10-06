@@ -225,3 +225,7 @@
 -dontwarn io.sentry.instrumentation.file.SentryFileOutputStream$Factory
 -dontwarn io.sentry.okhttp.SentryOkHttpEventListener
 -dontwarn io.sentry.okhttp.SentryOkHttpInterceptor
+# Runtime delegate swapping reflects on this field. Preserve it in optimized APKs.
+-keepclassmembers class androidx.media3.common.ForwardingPlayer {
+    private final androidx.media3.common.Player player;
+}

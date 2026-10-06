@@ -5,6 +5,7 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.TextureView
 import androidx.media3.common.ForwardingPlayer
+import androidx.media3.common.FlagSet
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
@@ -476,11 +477,29 @@ internal class DelegatingForwardingPlayer(
 
         Logger.d(TAG, "Manually notifying ${trackedListeners.size} listeners about media item change: ${metadata.title}")
 
-        trackedListeners.forEach { listener ->
+        val events = Player.Events(
+            FlagSet.Builder()
+                .add(Player.EVENT_TIMELINE_CHANGED)
+                .add(Player.EVENT_MEDIA_ITEM_TRANSITION)
+                .add(Player.EVENT_MEDIA_METADATA_CHANGED)
+                .add(Player.EVENT_AVAILABLE_COMMANDS_CHANGED)
+                .add(Player.EVENT_PLAYBACK_STATE_CHANGED)
+                .add(Player.EVENT_PLAY_WHEN_READY_CHANGED)
+                .add(Player.EVENT_IS_PLAYING_CHANGED)
+                .add(Player.EVENT_PLAYBACK_PARAMETERS_CHANGED)
+                .build(),
+        )
+        trackedListeners.toList().forEach { listener ->
             try {
                 listener.onMediaItemTransition(mediaItem, Player.MEDIA_ITEM_TRANSITION_REASON_AUTO)
                 listener.onMediaMetadataChanged(metadata)
                 listener.onAvailableCommandsChanged(commands)
+                listener.onTimelineChanged(currentTimeline, Player.TIMELINE_CHANGE_REASON_SOURCE_UPDATE)
+                listener.onPlaybackStateChanged(playbackState)
+                listener.onPlayWhenReadyChanged(playWhenReady, Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
+                listener.onIsPlayingChanged(isPlaying)
+                listener.onPlaybackParametersChanged(playbackParameters)
+                listener.onEvents(this, events)
             } catch (e: Exception) {
                 Logger.w(TAG, "Error notifying listener about media item change: ${e.message}")
             }

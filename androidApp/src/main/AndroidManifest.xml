@@ -228,6 +228,7 @@
         </service>
         <service
             android:name="com.maxrave.media3.service.SimpleMediaService"
+            android:icon="@drawable/nothing_player_logo"
             android:exported="true"
             android:foregroundServiceType="mediaPlayback"
             android:stopWithTask="false"
@@ -268,6 +269,7 @@
 
         <service
             android:name="com.maxrave.media3.carapp.NothingPlayerCarAppService"
+            android:icon="@drawable/nothing_player_logo"
             android:exported="true"
             tools:ignore="ExportedService">
             <intent-filter>

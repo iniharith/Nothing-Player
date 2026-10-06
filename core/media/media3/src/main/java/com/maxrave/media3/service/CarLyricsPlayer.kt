@@ -131,9 +131,11 @@ internal class CarLyricsPlayer(
 
 /** Keep the original metadata during intros, gaps and when synced lyrics are unavailable. */
 internal fun lyricWindow(lines: List<Line>, positionMs: Long): Pair<String, String>? {
-    val timed = lines.mapNotNull { line -> line.startTimeMs.toLongOrNull()?.let { it to line.words.trim() } }
+    val timed = lines.mapNotNull { line -> line.startTimeMs.toLongOrNull()?.let { Triple(it, line.words.trim(), line.endTimeMs.toLongOrNull()) } }
         .sortedBy { it.first }
     val index = timed.indexOfLast { it.first <= positionMs }
     if (index < 0 || timed[index].second.isBlank()) return null
+    val end = timed[index].third
+    if (end != null && end > timed[index].first && positionMs >= end) return null
     return timed[index].second to timed.getOrNull(index + 1)?.second.orEmpty()
 }

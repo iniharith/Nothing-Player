@@ -22,6 +22,13 @@ class CarLyricsWindowTest {
         assertEquals("First" to "Second", lyricWindow(listOf(line("2000", "Second"), line("bad", "Ignored"), line("1000", "First")), 1500))
         assertNull(lyricWindow(emptyList(), 1000))
     }
+    @Test fun explicitLineEndClearsLyricsDuringGap() {
+        val lines = listOf(Line("1500", "1000", null, "First"), line("2500", "Next"))
+        assertEquals("First" to "Next", lyricWindow(lines, 1499))
+        assertNull(lyricWindow(lines, 1500))
+        assertEquals("Next" to "", lyricWindow(lines, 2500))
+    }
+
     @Test fun offsetCanDelayLyricsUntilTheirTimestamp() {
         assertNull(lyricWindow(lyrics, 1200 - 500L))
         assertEquals("Second" to "", lyricWindow(lyrics, 1500 + 500L))

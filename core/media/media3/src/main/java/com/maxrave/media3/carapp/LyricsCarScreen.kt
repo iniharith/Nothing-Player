@@ -20,7 +20,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
@@ -39,6 +42,9 @@ internal class LyricsCarScreen(
     private val lyricsRepository: LyricsCanvasRepository by inject()
     private val screenScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
+    private val settings: com.maxrave.domain.manager.DataStoreManager by inject()
+    private var lyricsJob: Job? = null
+    private var offsetMs = 0
     private var lyrics: Lyrics? = null
     private var status: String = "Fetching lyrics..."
 
@@ -50,6 +56,7 @@ internal class LyricsCarScreen(
                 }
             },
         )
+        screenScope.launch { settings.lyricsOffset.collect { offsetMs = it } }
         // Refetch when the playing track changes
         screenScope.launch {
             var lastMediaId: String? = null
@@ -110,7 +117,8 @@ internal class LyricsCarScreen(
     }
 
     private fun fetchLyrics() {
-        screenScope.launch {
+        lyricsJob?.cancel()
+        lyricsJob = screenScope.launch {
             val item = handler.nowPlaying.value
             val title = item?.metadata?.title
             val artist = item?.metadata?.artist
@@ -122,12 +130,13 @@ internal class LyricsCarScreen(
             }
             status = "Fetching lyrics..."
             lyrics = null
-            val duration = handler.getPlayerDuration().takeIf { it > 0 }?.toInt()
-            lyrics =
+            val duration = handler.getPlayerDuration().takeIf { it > 0 }?.div(1000)?.toInt()
+            lyrics = try { withTimeoutOrNull(20_000) {
                 lyricsRepository
                     .getLrclibLyricsData(artist.orEmpty(), title.orEmpty(), duration)
-                    .first { it is Resource.Success<*> || it is Resource.Error }
-                    .data
+                    .firstOrNull()?.data
+            } } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { null }
+            if (handler.nowPlaying.value?.mediaId != item?.mediaId) return@launch
             status =
                 when {
                     lyrics?.lines.isNullOrEmpty() -> "No synced lyrics found"
@@ -141,21 +150,9 @@ internal class LyricsCarScreen(
     private fun lyricRows(): List<String> {
         val lines = lyrics?.lines.orEmpty()
         if (lines.isEmpty()) return emptyList()
-        val index = activeIndex(handler.getProgress(), lines)
-        val current = lines[index].words
-        val next = lines.getOrNull(index + 1)?.words.orEmpty()
-        return listOf(current, next)
-    }
-
-    private fun activeIndex(
-        progressMs: Long,
-        lines: List<Line>,
-    ): Int {
-        var index = 0
-        for ((i, line) in lines.withIndex()) {
-            val start = line.startTimeMs.toLongOrNull() ?: continue
-            if (start <= progressMs) index = i else break
-        }
-        return index
+        if (lyrics?.syncType != "LINE_SYNCED") return emptyList()
+        val window = com.maxrave.media3.service.lyricWindow(lines, handler.getProgress() - offsetMs)
+            ?: return emptyList()
+        return listOf(window.first, window.second)
     }
 }
