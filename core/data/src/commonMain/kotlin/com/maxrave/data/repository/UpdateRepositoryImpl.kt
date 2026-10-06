@@ -26,6 +26,9 @@ internal class UpdateRepositoryImpl(
                     emit(
                         Resource.Success(
                             UpdateData(
+                                apkUrl = com.maxrave.domain.utils.UpdateApkPolicy.selectApk(
+                                    tag, response.assets.orEmpty().filterNotNull().map { it.name to it.browserDownloadUrl },
+                                ),
                                 tagName = tag,
                                 releaseTime = response.publishedAt ?: "",
                                 body = response.body ?: "",

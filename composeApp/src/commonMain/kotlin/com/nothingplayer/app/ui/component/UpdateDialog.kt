@@ -13,14 +13,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.maxrave.domain.data.model.update.UpdateData
-import com.nothingplayer.app.expect.openUrl
 import com.nothingplayer.app.ui.theme.typo
 import org.jetbrains.compose.resources.stringResource
 import nothingplayer.composeapp.generated.resources.Res
 import nothingplayer.composeapp.generated.resources.later
 import nothingplayer.composeapp.generated.resources.update_available
 import nothingplayer.composeapp.generated.resources.update_message
-import nothingplayer.composeapp.generated.resources.view_release
 
 @Composable
 fun UpdateDialog(update: UpdateData, onDismiss: () -> Unit) {
@@ -44,12 +42,8 @@ fun UpdateDialog(update: UpdateData, onDismiss: () -> Unit) {
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                openUrl(update.releaseUrl)
-                onDismiss()
-            }) {
-                Text(stringResource(Res.string.view_release), style = typo().bodySmall)
-            }
+            com.nothingplayer.app.expect.UpdateInstallButton(update)
+
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {

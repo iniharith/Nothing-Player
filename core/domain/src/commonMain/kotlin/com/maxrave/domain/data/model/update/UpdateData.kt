@@ -1,6 +1,7 @@
 package com.maxrave.domain.data.model.update
 
 data class UpdateData(
+    val apkUrl: String? = null,
     val tagName: String,
     val releaseTime: String?,
     val body: String,
