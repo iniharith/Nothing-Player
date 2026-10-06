@@ -196,25 +196,42 @@ internal class CrossfadeExoPlayerAdapter(
         AudioManager.OnAudioFocusChangeListener { focusChange ->
             when (focusChange) {
                 AudioManager.AUDIOFOCUS_GAIN -> {
+                    hasAudioFocus = true
+                    forwardingPlayer.transientAudioFocusLoss = false
                     // Don't fight the crossfade ramp; while crossfading it owns the volume.
                     if (!isCrossfading) currentPlayer?.volume = internalVolume
                     if (resumeOnFocusGain) {
                         resumeOnFocusGain = false
                         play()
                     }
+                    forwardingPlayer.notifyMediaItemChanged()
                 }
 
                 AudioManager.AUDIOFOCUS_LOSS -> {
                     // Permanent loss (another app took over): pause and stop tracking focus.
                     resumeOnFocusGain = false
+                    forwardingPlayer.transientAudioFocusLoss = false
                     hasAudioFocus = false
                     pause()
                 }
 
                 AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
                     // Temporary loss (e.g. an incoming call): pause and remember to resume.
-                    resumeOnFocusGain = internalState == InternalState.PLAYING
-                    pause()
+                    resumeOnFocusGain = resumeOnFocusGain || internalPlayWhenReady
+                    if (resumeOnFocusGain) {
+                        forwardingPlayer.transientAudioFocusLoss = true
+                        coroutineScope.launch {
+                            if (isCrossfading) commitIncomingAsCurrentInternal()
+                            // Focus may return while this queued coroutine waits for a handoff.
+                            // Do not pause again after AUDIOFOCUS_GAIN already resumed playback.
+                            if (!forwardingPlayer.transientAudioFocusLoss) return@launch
+                            currentPlayer?.pause()
+                            secondaryPlayer?.pause()
+                            // Preserve user playback intent and the loaded track. A temporary
+                            // interruption must not look like a user pause to the service.
+                            forwardingPlayer.notifyMediaItemChanged()
+                        }
+                    }
                 }
 
                 AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
@@ -255,6 +272,7 @@ internal class CrossfadeExoPlayerAdapter(
         am.abandonAudioFocusRequest(audioFocusRequest)
         hasAudioFocus = false
         resumeOnFocusGain = false
+        forwardingPlayer.transientAudioFocusLoss = false
         Logger.d(TAG, "abandonAudioFocus")
     }
 
@@ -572,6 +590,8 @@ internal class CrossfadeExoPlayerAdapter(
 
                 InternalState.PLAYING -> {
                     internalPlayWhenReady = true
+                    requestAudioFocusInternal()
+                    currentPlayer?.play()
                     cachedIsLoading = false
                 }
 
@@ -583,6 +603,8 @@ internal class CrossfadeExoPlayerAdapter(
     }
 
     override fun pause() {
+        resumeOnFocusGain = false
+        forwardingPlayer.transientAudioFocusLoss = false
         Logger.d(TAG, "pause() called (state: $internalState, playWhenReady: $internalPlayWhenReady)")
         internalPlayWhenReady = false
         castRemotePlayer?.let { remote ->
@@ -618,10 +640,15 @@ internal class CrossfadeExoPlayerAdapter(
                     Logger.w(TAG, "Pause: Called in invalid state: $internalState")
                 }
             }
+            // A user pause during focus suppression may not change the delegate's
+            // already-paused state, so explicitly clear the session's resume intent.
+            forwardingPlayer.notifyMediaItemChanged()
         }
     }
 
     override fun stop() {
+        resumeOnFocusGain = false
+        forwardingPlayer.transientAudioFocusLoss = false
         internalPlayWhenReady = false
         currentLoadJob?.cancel()
         currentLoadJob = null
@@ -1499,8 +1526,8 @@ internal class CrossfadeExoPlayerAdapter(
                         cachedPosition = startPositionMs
                     }
 
-                    // Auto-play if requested
-                    if (internalPlayWhenReady) {
+                    // Do not steal focus back while a notification/call interrupts loading.
+                    if (internalPlayWhenReady && !forwardingPlayer.transientAudioFocusLoss) {
                         requestAudioFocusInternal()
                         player.play()
                         transitionToState(InternalState.PLAYING)

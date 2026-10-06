@@ -9,7 +9,6 @@ import androidx.core.net.toUri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
-import androidx.media3.common.Player.COMMAND_GET_TIMELINE
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.LibraryResult
@@ -99,7 +98,7 @@ internal class SimpleMediaSessionCallback(
     private val carPlayerListener =
         object : Player.Listener {
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-                if (!playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST) {
+                if (!playWhenReady && carPlayer?.playWhenReady != true && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST) {
                     carResumeGate.onUserPause()
                     carResumeJob?.cancel()
                     cancelPlaybackPreparation()
@@ -273,7 +272,7 @@ internal class SimpleMediaSessionCallback(
                 Player.Commands
                     .Builder()
                     .addAllCommands()
-                    .remove(COMMAND_GET_TIMELINE)
+                    // Media3's notification controller requires the timeline to show controls.
                     .build(),
             ).build()
     }

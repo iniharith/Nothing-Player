@@ -170,6 +170,15 @@ internal class DelegatingForwardingPlayer(
     @Volatile
     var suppressPlaybackEnded = false
 
+    var transientAudioFocusLoss = false
+
+    override fun getPlayWhenReady(): Boolean = transientAudioFocusLoss || super.getPlayWhenReady()
+
+    override fun getPlaybackSuppressionReason(): Int =
+        if (transientAudioFocusLoss) Player.PLAYBACK_SUPPRESSION_REASON_TRANSIENT_AUDIO_FOCUS_LOSS
+        else super.getPlaybackSuppressionReason()
+
+
     override fun getPlaybackState(): Int {
         val state = super.getPlaybackState()
         if (state == Player.STATE_ENDED && suppressPlaybackEnded) {
@@ -487,6 +496,7 @@ internal class DelegatingForwardingPlayer(
                 .add(Player.EVENT_PLAY_WHEN_READY_CHANGED)
                 .add(Player.EVENT_IS_PLAYING_CHANGED)
                 .add(Player.EVENT_PLAYBACK_PARAMETERS_CHANGED)
+                .add(Player.EVENT_PLAYBACK_SUPPRESSION_REASON_CHANGED)
                 .build(),
         )
         trackedListeners.toList().forEach { listener ->
@@ -498,6 +508,7 @@ internal class DelegatingForwardingPlayer(
                 listener.onPlaybackStateChanged(playbackState)
                 listener.onPlayWhenReadyChanged(playWhenReady, Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
                 listener.onIsPlayingChanged(isPlaying)
+                listener.onPlaybackSuppressionReasonChanged(playbackSuppressionReason)
                 listener.onPlaybackParametersChanged(playbackParameters)
                 listener.onEvents(this, events)
             } catch (e: Exception) {

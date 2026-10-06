@@ -15,6 +15,14 @@ class PlaybackServicePolicyTest {
         assertTrue(PlaybackServicePolicy.shouldContinuePlayback(true, 3, true, false))
     }
 
+    @Test fun temporaryInterruptionKeepsPlaybackServiceWhileUserPauseDoesNot() {
+        assertTrue(PlaybackServicePolicy.shouldKeepForeground(false, true, 1, true))
+        assertFalse(PlaybackServicePolicy.shouldKeepForeground(false, false, 1, true))
+        assertFalse(PlaybackServicePolicy.shouldKeepForeground(false, true, 0, true))
+        assertFalse(PlaybackServicePolicy.shouldKeepForeground(false, false, 1, false))
+        assertTrue(PlaybackServicePolicy.shouldKeepForeground(true, true, 1, false))
+    }
+
     @Test fun explicitStopOnExitWins() {
         assertFalse(PlaybackServicePolicy.shouldContinuePlayback(true, 3, true, true))
     }

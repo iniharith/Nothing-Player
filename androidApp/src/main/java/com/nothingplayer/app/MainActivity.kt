@@ -57,6 +57,7 @@ class MainActivity : AppCompatActivity() {
     val mediaPlayerHandler by inject<MediaPlayerHandler>()
     val dataStoreManager: DataStoreManager by inject()
 
+    private var playbackBinder: IBinder? = null
     private var mBound = false
     private var shouldUnbind = false
     private val serviceConnection =
@@ -66,6 +67,7 @@ class MainActivity : AppCompatActivity() {
                 service: IBinder?,
             ) {
 //                mediaPlayerHandler.setActivitySession(this@MainActivity, MainActivity::class.java, service)
+                playbackBinder = service
                 setServiceActivitySession(this@MainActivity, MainActivity::class.java, service)
                 Logger.w("MainActivity", "onServiceConnected: ")
                 mBound = true
@@ -73,6 +75,7 @@ class MainActivity : AppCompatActivity() {
 
             override fun onServiceDisconnected(name: ComponentName?) {
                 Logger.w("MainActivity", "onServiceDisconnected: ")
+                playbackBinder = null
                 mBound = false
             }
         }
@@ -83,9 +86,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onStop() {
+        com.maxrave.media3.di.retainServiceForPlayback(playbackBinder)
         if (shouldUnbind) {
             unbindService(serviceConnection)
             shouldUnbind = false
+            playbackBinder = null
             mBound = false
         }
         super.onStop()

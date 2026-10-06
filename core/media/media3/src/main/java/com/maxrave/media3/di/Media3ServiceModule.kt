@@ -582,3 +582,8 @@ fun setServiceActivitySession(
 ) {
     (musicService as? SimpleMediaService.MusicBinder)?.setActivitySession(context, cls)
 }
+
+@OptIn(UnstableApi::class)
+fun retainServiceForPlayback(musicService: IBinder?) {
+    (musicService as? SimpleMediaService.MusicBinder)?.retainForPlayback()
+}

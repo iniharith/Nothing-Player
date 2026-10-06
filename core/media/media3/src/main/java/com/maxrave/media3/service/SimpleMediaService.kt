@@ -45,15 +45,28 @@ internal class SimpleMediaService : MediaLibraryService(), KoinComponent {
     private val preparationHandler = Handler(Looper.getMainLooper())
     private val preparationTimeout = Runnable {
         if (preparingPlayback) {
-            stopPlayback()
-            mediaSession?.release()
-            mediaSession = null
+            preparingPlayback = false
+            val session = mediaSession
+            if (session != null && session.player.mediaItemCount > 0) {
+                onUpdateNotification(session, session.player.playWhenReady)
+            } else {
+                stopPlayback()
+            }
         }
     }
 
     inner class MusicBinder : Binder() {
         val service: SimpleMediaService
             get() = this@SimpleMediaService
+
+        fun retainForPlayback() {
+            val playback = simpleMediaServiceHandler.player
+            if (playback.playWhenReady && playback.mediaItemCount > 0 && prepareForegroundPlayback()) {
+                // A foreground notification alone does not turn a bound service into
+                // a started service. Keep actual playback alive after the UI unbinds.
+                startService(Intent(this@SimpleMediaService, SimpleMediaService::class.java))
+            }
+        }
 
         fun setActivitySession(context: Context, activity: Class<out Activity>) {
             mediaSession?.setSessionActivity(
@@ -68,7 +81,7 @@ internal class SimpleMediaService : MediaLibraryService(), KoinComponent {
         super.onCreate()
         // Media3 owns the foreground lifecycle. A paused player must not keep an
         // ongoing service alive or be promoted by a second notification manager.
-        setForegroundServiceTimeoutMs(0)
+        setForegroundServiceTimeoutMs(30_000)
         setShowNotificationForIdlePlayer(SHOW_NOTIFICATION_FOR_IDLE_PLAYER_NEVER)
         setMediaNotificationProvider(
             DefaultMediaNotificationProvider(
@@ -101,6 +114,12 @@ internal class SimpleMediaService : MediaLibraryService(), KoinComponent {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = mediaSession
 
     private fun prepareForegroundPlayback(): Boolean {
+        val existingSession = mediaSession
+        if (existingSession != null && existingSession.player.mediaItemCount > 0 && existingSession.player.playbackState != Player.STATE_IDLE) {
+            // Keep the real media controls when a loaded track is paused/suppressed.
+            onUpdateNotification(existingSession, true)
+            return true
+        }
         if (preparingPlayback || isPlaybackOngoing) return true
         return try {
             getSystemService<NotificationManager>()?.createNotificationChannel(
@@ -141,9 +160,17 @@ internal class SimpleMediaService : MediaLibraryService(), KoinComponent {
     override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
         // The adapter has not yet swapped in its buffering player. Keep the brief
         // foreground notification until playback intent reaches that delegate.
-        if (preparingPlayback && !session.player.playWhenReady && session.player.playerError == null) return
-        super.onUpdateNotification(session, startInForegroundRequired)
-        if (session.player.playWhenReady && session.player.playbackState != Player.STATE_IDLE) {
+        if (preparingPlayback && session.player.mediaItemCount == 0 &&
+            simpleMediaServiceHandler.player.playWhenReady && session.player.playerError == null) return
+        val keepForeground = PlaybackServicePolicy.shouldKeepForeground(
+            startInForegroundRequired, session.player.playWhenReady, session.player.mediaItemCount,
+            session.player.playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_TRANSIENT_AUDIO_FOCUS_LOSS,
+        )
+        super.onUpdateNotification(session, keepForeground)
+        if (keepForeground && session.player.playWhenReady && session.player.mediaItemCount > 0) {
+            startService(Intent(this, SimpleMediaService::class.java))
+        }
+        if (session.player.mediaItemCount > 0 && session.player.playbackState != Player.STATE_IDLE) {
             preparingPlayback = false
             preparationHandler.removeCallbacks(preparationTimeout)
         }
