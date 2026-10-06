@@ -180,7 +180,7 @@ internal class StreamRepositoryImpl(
                     val durationSecond = response.videoDetails?.lengthSeconds?.toIntOrNull()
                     val newFormat =
                         NewFormatEntity(
-                            videoId = if (VIDEO_QUALITY.itags.contains(format?.itag)) "${MERGING_DATA_TYPE.VIDEO}$videoId" else videoId,
+                            videoId = if (isVideo) "${MERGING_DATA_TYPE.VIDEO}$videoId" else videoId,
                             itag = format?.itag ?: itag ?: 141,
                             mimeType =
                                 Regex("""([^;]+);\s*codecs=["']([^"']+)["']""")

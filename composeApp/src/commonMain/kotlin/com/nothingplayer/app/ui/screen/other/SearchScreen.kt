@@ -13,6 +13,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -157,6 +158,8 @@ import nothingplayer.composeapp.generated.resources.what_do_you_want_to_listen_t
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalHazeMaterialsApi::class)
 @Composable
 fun SearchScreen(
+    videosOnly: Boolean = false,
+    onVideoSelected: () -> Unit = {},
     searchViewModel: SearchViewModel = koinInject(),
     sharedViewModel: SharedViewModel = koinInject(),
     navController: NavController,
@@ -221,7 +224,7 @@ fun SearchScreen(
     // Animated Placeholder
     val placeholderTexts =
         remember {
-            listOf(
+            if (videosOnly) listOf("Search YouTube videos...") else listOf(
                 "$searchForString $songString...",
                 "$searchForString $artistString...",
                 "$searchForString $albumString...",
@@ -262,6 +265,10 @@ fun SearchScreen(
         }
     }
 
+    LaunchedEffect(videosOnly, searchText) {
+        if (videosOnly && searchText.isBlank()) searchViewModel.searchVideos("")
+    }
+
     LaunchedEffect(isSearchSubmitted) {
         if (isSearchSubmitted) {
             isExpanded = false
@@ -280,6 +287,8 @@ fun SearchScreen(
                 SearchUIType.SEARCH_SUGGESTIONS
             } else if (isFocused && isExpanded) {
                 SearchUIType.SEARCH_HISTORY
+            } else if (videosOnly) {
+                SearchUIType.SEARCH_RESULTS
             } else if (searchText.isEmpty()) {
                 SearchUIType.EMPTY
             } else {
@@ -509,7 +518,9 @@ fun SearchScreen(
 
                 SearchUIType.EMPTY -> {
                     val mood = moodAndGenres
-                    if (mood == null) {
+                    if (videosOnly) {
+                        CenterLoadingBox(Modifier.fillMaxSize())
+                    } else if (mood == null) {
                         // First run only: the repository serves its cached copy before hitting the
                         // network, so this spinner is never seen again after the first fetch.
                         CenterLoadingBox(Modifier.fillMaxSize())
@@ -731,7 +742,7 @@ fun SearchScreen(
                                                                 }
 
                                                                 is VideosResult -> {
-                                                                    SongFullWidthItems(
+                                                                    VideoFeedItems(
                                                                         track = result.toTrack(),
                                                                         isPlaying = result.videoId == currentVideoId,
                                                                         modifier = Modifier,
@@ -742,20 +753,21 @@ fun SearchScreen(
                                                                             val firstTrack = result.toTrack()
                                                                             searchViewModel.setQueueData(
                                                                                 QueueData.Data(
-                                                                                    listTracks = arrayListOf(firstTrack),
+                                                                                    listTracks = if (videosOnly) ArrayList(currentResults.filterIsInstance<VideosResult>().map { it.toTrack() }) else arrayListOf(firstTrack),
                                                                                     firstPlayedTrack = firstTrack,
-                                                                                    playlistId = "RDAMVM${result.videoId}",
+                                                                                    playlistId = if (videosOnly) null else "RDAMVM${result.videoId}",
                                                                                     playlistName =
                                                                                         "\"${searchText}\" ${
                                                                                             getStringBlocking(
                                                                                                 Res.string.in_search,
                                                                                             )
                                                                                         }",
-                                                                                    playlistType = PlaylistType.RADIO,
+                                                                                    playlistType = if (videosOnly) PlaylistType.PLAYLIST else PlaylistType.RADIO,
                                                                                     continuation = null,
                                                                                 ),
                                                                             )
-                                                                            searchViewModel.loadMediaItem(firstTrack, Config.VIDEO_CLICK)
+                                                                            searchViewModel.loadMediaItem(firstTrack, Config.VIDEO_CLICK, if (videosOnly) currentResults.filterIsInstance<VideosResult>().indexOf(result) else null)
+                                                                            if (videosOnly) onVideoSelected()
                                                                         },
                                                                         onAddToQueue = {
                                                                             sharedViewModel.addListToQueue(
@@ -1002,7 +1014,7 @@ fun SearchScreen(
                                 .padding(top = 10.dp)
                                 .padding(horizontal = 12.dp),
                     ) {
-                        SearchType.entries.forEach { id ->
+                        (if (videosOnly) listOf(SearchType.VIDEOS) else SearchType.entries).forEach { id ->
                             val isSelected = id == searchScreenState.searchType
                             Spacer(modifier = Modifier.width(4.dp))
                             Chip(
@@ -1159,4 +1171,33 @@ enum class SearchUIType {
     SEARCH_HISTORY,
     SEARCH_SUGGESTIONS,
     SEARCH_RESULTS,
+}
+@Composable
+private fun VideoFeedItems(
+    track: Track,
+    isPlaying: Boolean,
+    modifier: Modifier,
+    onMoreClickListener: () -> Unit,
+    onClickListener: () -> Unit,
+    onAddToQueue: () -> Unit,
+) {
+    Column(modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
+        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainer).clickable(onClick = onClickListener)) {
+            AsyncImage(model = track.thumbnails?.lastOrNull()?.url, contentDescription = track.title,
+                modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            Text(track.duration ?: "", style = typo().labelMedium, color = Color.White,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp).background(Color.Black.copy(alpha = 0.8f), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 3.dp))
+            if (isPlaying) Text("NOW PLAYING", color = MaterialTheme.colorScheme.onPrimary, style = typo().labelMedium,
+                modifier = Modifier.align(Alignment.TopStart).padding(10.dp).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(6.dp)).padding(6.dp))
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.Top) {
+            Column(Modifier.weight(1f).clickable(onClick = onClickListener)) {
+                Text(track.title, style = typo().titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(track.artists?.joinToString(" • ") { it.name }.orEmpty(), style = typo().bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            TextButton(onClick = onMoreClickListener) { Text("•••") }
+        }
+        TextButton(onClick = onAddToQueue) { Text("Add to queue", style = typo().labelSmall) }
+    }
 }

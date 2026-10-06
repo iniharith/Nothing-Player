@@ -61,6 +61,14 @@ fun AppNavigationGraph(
                 navController = navController,
             )
         }
+        composable<com.nothingplayer.app.ui.navigation.destination.search.VideosDestination> {
+            SearchScreen(
+                searchViewModel = org.koin.compose.koinInject(qualifier = org.koin.core.qualifier.named("youtubeVideos")),
+                videosOnly = true,
+                onVideoSelected = showNowPlayingSheet,
+                navController = navController,
+            )
+        }
         composable<LibraryDestination> {
             LibraryScreen(
                 innerPadding = innerPadding,

@@ -127,6 +127,9 @@ private const val TAG = "YouTubeScraper"
  */
 
 class YouTube {
+    suspend fun accountHomeVideos() = runCatching { ytMusic.accountHomeVideos() }
+
+    fun searchRegularVideos(query: String) = runCatching { ytMusic.searchRegularVideos(query) }
     private val ytMusic = Ytmusic()
 
     private val tidalTokenMutex = Mutex()
@@ -1319,6 +1322,10 @@ class YouTube {
                                 epoch.daysUntil(today)
                             },
                     ).body<PlayerResponse>()
+                    .let { response -> if (response.playabilityStatus.status == "OK") response else {
+                        val web = ytMusic.player(WEB, videoId, playlistId, cpn).body<PlayerResponse>()
+                        if (web.playabilityStatus.status == "OK") web else ytMusic.regularVideoPlayer(videoId)
+                    } }
                     .let {
                         val fexp =
                             it.streamingData
@@ -1372,7 +1379,7 @@ class YouTube {
                         )
                     }
 
-            val response = newPipePlayer(videoId, tempRes)
+            val response = if (tempRes.videoDetails?.musicVideoType == "VIDEO" && tempRes.streamingData?.adaptiveFormats?.any { !it.url.isNullOrBlank() } == true) tempRes else newPipePlayer(videoId, tempRes)
             if (response != null) {
                 decodedSigResponse = response
                 Logger.d(TAG, "YouTube Player found URL")
@@ -1800,32 +1807,17 @@ class YouTube {
         videoId: String,
         preferLang: String,
     ) = runCatching {
-        val ytWeb = ytMusic.player(WEB, videoId, null, null).body<YouTubeInitialPage>()
-        val baseCaption =
-            ytMusic
-                .getYouTubeCaption(
-                    ytWeb.captions?.playerCaptionsTracklistRenderer?.captionTracks?.firstOrNull()?.baseUrl?.replace(
-                        "&fmt=srv3",
-                        "",
-                    ) ?: "",
-                ).body<Transcript>()
-                .tryDecodeText()
-        val translateCaption =
-            try {
-                ytMusic
-                    .getYouTubeCaption(
-                        "${
-                            ytWeb.captions?.playerCaptionsTracklistRenderer?.captionTracks?.firstOrNull()?.baseUrl?.replace(
-                                "&fmt=srv3",
-                                "",
-                            )
-                        }&tlang=$preferLang",
-                    ).body<Transcript>()
-                    .tryDecodeText()
-            } catch (e: Exception) {
-                e.printStackTrace()
-                null
-            }
+        val webTracks = runCatching { ytMusic.player(WEB, videoId, null, null).body<YouTubeInitialPage>().captions?.playerCaptionsTracklistRenderer?.captionTracks }.getOrNull()
+        val tracks = webTracks?.takeIf { it.isNotEmpty() }
+            ?: ytMusic.regularVideoPlayer(videoId).captions?.playerCaptionsTracklistRenderer?.captionTracks
+        val track = tracks?.firstOrNull { it.vssId == preferLang || it.vssId?.endsWith(".$preferLang") == true } ?: tracks?.firstOrNull()
+        val rawUrl = track?.baseUrl?.takeIf { it.isNotBlank() } ?: error("Captions unavailable for this video")
+        val captionUrl = rawUrl.replace(Regex("[&?]fmt=[^&]*"), "") + "&fmt=srv1"
+        val baseCaption = ytMusic.getYouTubeCaption(captionUrl).body<Transcript>().tryDecodeText()
+        val translateCaption = if (track.vssId == preferLang || track.vssId?.endsWith(".$preferLang") == true) baseCaption else try {
+            ytMusic.getYouTubeCaption("$captionUrl&tlang=$preferLang").body<Transcript>().tryDecodeText()
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (_: Exception) { null }
         return@runCatching baseCaption to translateCaption
     }
 

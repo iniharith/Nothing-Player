@@ -3,6 +3,13 @@ package com.maxrave.logger
 import co.touchlab.kermit.Logger
 
 object Logger {
+    var playbackDiagnosticSink: ((String) -> Unit)? = null
+
+    fun playbackEvent(message: String) {
+        runCatching { playbackDiagnosticSink?.invoke(message) }
+        logger.i(tag = "PlaybackDiagnostic", message = { message })
+    }
+
     private val logger = Logger
 
     // Tags suppressed at all log levels. Add a tag here to silence its logs globally.

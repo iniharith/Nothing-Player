@@ -270,12 +270,12 @@ fun MediaPlayerViewWithSubtitle(
         if (timelineState.current > 0L) {
             lines.indices.forEach { i ->
                 val sentence = lines[i]
-                val startTimeMs = sentence.startTimeMs.toLong()
+                val startTimeMs = sentence.startTimeMs.toLongOrNull() ?: return@forEach
 
                 // estimate the end time of the current sentence based on the start time of the next sentence
                 val endTimeMs =
                     if (i < lines.size - 1) {
-                        lines[i + 1].startTimeMs.toLong()
+                        lines[i + 1].startTimeMs.toLongOrNull() ?: Long.MAX_VALUE
                     } else {
                         // if this is the last sentence, set the end time to be some default value (e.g., 1 minute after the start time)
                         startTimeMs + 60000
@@ -286,12 +286,12 @@ fun MediaPlayerViewWithSubtitle(
             }
             translatedLines?.indices?.forEach { i ->
                 val sentence = translatedLines[i]
-                val startTimeMs = sentence.startTimeMs.toLong()
+                val startTimeMs = sentence.startTimeMs.toLongOrNull() ?: return@forEach
 
                 // estimate the end time of the current sentence based on the start time of the next sentence
                 val endTimeMs =
                     if (i < translatedLines.size - 1) {
-                        translatedLines[i + 1].startTimeMs.toLong()
+                        translatedLines[i + 1].startTimeMs.toLongOrNull() ?: Long.MAX_VALUE
                     } else {
                         // if this is the last sentence, set the end time to be some default value (e.g., 1 minute after the start time)
                         startTimeMs + 60000
@@ -300,16 +300,7 @@ fun MediaPlayerViewWithSubtitle(
                     currentTranslatedLineIndex = i
                 }
             }
-            if (lines.isNotEmpty() &&
-                (
-                    effectiveMs in (
-                        0..(
-                            lines.getOrNull(0)?.startTimeMs
-                                ?: "0"
-                        ).toLong()
-                    )
-                )
-            ) {
+            if (effectiveMs < (lines.firstOrNull()?.startTimeMs?.toLongOrNull() ?: 0L)) {
                 currentLineIndex = -1
                 currentTranslatedLineIndex = -1
             }
@@ -380,7 +371,7 @@ fun MediaPlayerViewWithSubtitle(
 
                 // Add autoEnterEnabled for versions S and up
                 builder.setAutoEnterEnabled(false)
-                activity.setPictureInPictureParams(builder.build())
+                runCatching { activity.setPictureInPictureParams(builder.build()) }
             }
         }
     }
@@ -401,7 +392,7 @@ fun MediaPlayerViewWithSubtitle(
             val onUserLeaveBehavior =
                 Runnable {
                     if (currentShouldEnterPipMode) {
-                        activity.enterPictureInPictureMode(PictureInPictureParams.Builder().build())
+                        runCatching { activity.enterPictureInPictureMode(PictureInPictureParams.Builder().build()) }
                     }
                 }
             activity.addOnUserLeaveHintListener(
@@ -425,7 +416,7 @@ fun MediaPlayerViewWithSubtitle(
 
                             // Add autoEnterEnabled for versions S and up
                             builder.setAutoEnterEnabled(shouldEnterPipMode)
-                            activity?.setPictureInPictureParams(builder.build())
+                            runCatching { activity.setPictureInPictureParams(builder.build()) }
                         }
                     } else {
                         Modifier
@@ -460,8 +451,11 @@ fun MediaPlayerViewWithSubtitle(
                     surfaceType = SURFACE_TYPE_SURFACE_VIEW,
                     modifier =
                         Modifier
-                            .wrapContentSize()
-                            .aspectRatio(if (videoRatio > 0f) videoRatio else 16f / 9)
+                            .fillMaxSize()
+                            .resizeWithContentScale(
+                                contentScale = ContentScale.Fit,
+                                sourceSizeDp = presentationState.videoSizeDp,
+                            )
                             .align(Alignment.Center),
                 )
 

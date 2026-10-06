@@ -43,6 +43,7 @@ fun AppBottomNavigationBar(
             BottomNavScreen.Home,
             BottomNavScreen.Search,
             BottomNavScreen.Library,
+            BottomNavScreen.Videos,
         )
     var selectedIndex by rememberSaveable {
         mutableIntStateOf(
@@ -50,6 +51,7 @@ fun AppBottomNavigationBar(
                 is HomeDestination -> BottomNavScreen.Home.ordinal
                 is SearchDestination -> BottomNavScreen.Search.ordinal
                 is LibraryDestination -> BottomNavScreen.Library.ordinal
+                is com.nothingplayer.app.ui.navigation.destination.search.VideosDestination -> BottomNavScreen.Videos.ordinal
                 else -> BottomNavScreen.Home.ordinal // Default to Home if not recognized
             },
         )
@@ -141,6 +143,7 @@ fun AppNavigationRail(
             BottomNavScreen.Home,
             BottomNavScreen.Search,
             BottomNavScreen.Library,
+            BottomNavScreen.Videos,
         )
     var selectedIndex by rememberSaveable {
         mutableIntStateOf(
@@ -148,6 +151,7 @@ fun AppNavigationRail(
                 is HomeDestination -> BottomNavScreen.Home.ordinal
                 is SearchDestination -> BottomNavScreen.Search.ordinal
                 is LibraryDestination -> BottomNavScreen.Library.ordinal
+                is com.nothingplayer.app.ui.navigation.destination.search.VideosDestination -> BottomNavScreen.Videos.ordinal
                 else -> BottomNavScreen.Home.ordinal // Default to Home if not recognized
             },
         )

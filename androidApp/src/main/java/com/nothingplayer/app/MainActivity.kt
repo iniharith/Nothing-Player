@@ -86,6 +86,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onStop() {
+        Logger.playbackEvent("activity-stop bound=$mBound intent=${mediaPlayerHandler.player.playWhenReady} items=${mediaPlayerHandler.player.mediaItemCount}")
         com.maxrave.media3.di.retainServiceForPlayback(playbackBinder)
         if (shouldUnbind) {
             unbindService(serviceConnection)
@@ -111,6 +112,7 @@ class MainActivity : AppCompatActivity() {
     @ExperimentalFoundationApi
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        com.maxrave.media3.service.PlaybackDiagnostics.install(this)
         loadKoinModules(
             module {
                 single<AppCompatActivity> { this@MainActivity }

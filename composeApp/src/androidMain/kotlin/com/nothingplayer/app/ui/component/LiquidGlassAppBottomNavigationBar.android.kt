@@ -123,12 +123,14 @@ actual fun LiquidGlassAppBottomNavigationBar(
             BottomNavScreen.Home,
             BottomNavScreen.Search,
             BottomNavScreen.Library,
+            BottomNavScreen.Videos,
         )
     // Tabs shown in the sliding bar (Apple Music style); Search lives in its own FAB.
     val barTabs =
         listOf(
             BottomNavScreen.Home,
             BottomNavScreen.Library,
+            BottomNavScreen.Videos,
         )
     var selectedIndex by rememberSaveable {
         mutableIntStateOf(
@@ -136,6 +138,7 @@ actual fun LiquidGlassAppBottomNavigationBar(
                 is HomeDestination -> BottomNavScreen.Home.ordinal
                 is SearchDestination -> BottomNavScreen.Search.ordinal
                 is LibraryDestination -> BottomNavScreen.Library.ordinal
+                is com.nothingplayer.app.ui.navigation.destination.search.VideosDestination -> BottomNavScreen.Videos.ordinal
                 else -> BottomNavScreen.Home.ordinal // Default to Home if not recognized
             },
         )

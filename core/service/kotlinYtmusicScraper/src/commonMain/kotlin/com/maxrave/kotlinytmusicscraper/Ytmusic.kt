@@ -8,6 +8,7 @@ import com.maxrave.kotlinytmusicscraper.models.WatchEndpoint
 import com.maxrave.kotlinytmusicscraper.models.YouTubeClient
 import com.maxrave.kotlinytmusicscraper.models.YouTubeClient.Companion.IOS
 import com.maxrave.kotlinytmusicscraper.models.YouTubeClient.Companion.TVHTML5
+import com.maxrave.kotlinytmusicscraper.models.YouTubeClient.Companion.WEB
 import com.maxrave.kotlinytmusicscraper.models.YouTubeClient.Companion.WEB_REMIX
 import com.maxrave.kotlinytmusicscraper.models.YouTubeLocale
 import com.maxrave.kotlinytmusicscraper.models.body.AccountMenuBody
@@ -73,7 +74,7 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toInstant
 import kotlinx.io.readByteArray
 import kotlinx.serialization.ExperimentalSerializationApi
-import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.*
 import nl.adaptivity.xmlutil.XmlDeclMode
 import nl.adaptivity.xmlutil.serialization.XML
 import okio.FileSystem
@@ -229,7 +230,8 @@ class Ytmusic {
             pageId?.let {
                 append("X-Goog-Pageid", it)
             }
-            append("x-origin", "https://music.youtube.com")
+            val origin = if (client == WEB) "https://www.youtube.com" else "https://music.youtube.com"
+            append("x-origin", origin)
             if (client.referer != null && isUsingReferer) {
                 append("Referer", client.referer)
             }
@@ -237,11 +239,10 @@ class Ytmusic {
                 val cookie = customCookie ?: this@Ytmusic.cookie
                 cookie?.let { cookie ->
                     append("Cookie", cookie)
-                    if ("SAPISID" !in cookieMap || "__Secure-3PAPISID" !in cookieMap) return@let
-                    val currentTime = now().toInstant(TimeZone.currentSystemDefault()).epochSeconds / 1000
+                    if ("SAPISID" !in cookieMap && "__Secure-3PAPISID" !in cookieMap) return@let
+                    val currentTime = now().toInstant(TimeZone.currentSystemDefault()).epochSeconds
                     val sapisidCookie = cookieMap["SAPISID"] ?: cookieMap["__Secure-3PAPISID"]
-                    val sapisidHash = sha1("$currentTime $sapisidCookie https://music.youtube.com")
-                    Logger.d(TAG, "SAPI SID Hash: SAPISIDHASH ${currentTime}_$sapisidHash")
+                    val sapisidHash = sha1("$currentTime $sapisidCookie $origin")
                     append("Authorization", "SAPISIDHASH ${currentTime}_$sapisidHash")
                 }
             }
@@ -253,13 +254,27 @@ class Ytmusic {
     @OptIn(ExperimentalTime::class)
     internal fun getAuthorizationHeader(): String? =
         cookie?.let { cookie ->
+            val origin = "https://music.youtube.com"
             if ("SAPISID" !in cookieMap || "__Secure-3PAPISID" !in cookieMap) null
-            val currentTime = now().toInstant(TimeZone.currentSystemDefault()).epochSeconds / 1000
+            val currentTime = now().toInstant(TimeZone.currentSystemDefault()).epochSeconds
             val sapisidCookie = cookieMap["SAPISID"] ?: cookieMap["__Secure-3PAPISID"]
-            val sapisidHash = sha1("$currentTime $sapisidCookie https://music.youtube.com")
-            Logger.d(TAG, "SAPI SID Hash: SAPISIDHASH ${currentTime}_$sapisidHash")
+            val sapisidHash = sha1("$currentTime $sapisidCookie $origin")
             "SAPISIDHASH ${currentTime}_$sapisidHash"
         }
+
+    fun regularVideoPlayer(videoId: String) = extractor.regularVideoPlayer(videoId)
+
+    suspend fun accountHomeVideos(): List<com.maxrave.kotlinytmusicscraper.extractor.RegularVideo> {
+        check(!cookie.isNullOrBlank() && ("SAPISID" in cookieMap || "__Secure-3PAPISID" in cookieMap)) {
+            "Sign in to YouTube in Settings to load your personal recommendations"
+        }
+        val response = browse(WEB, browseId = "FEwhat_to_watch", setLogin = true)
+        check(response.status.value in 200..299) { "YouTube account home unavailable. Please sign in again" }
+        val videos = parseAccountHomeVideos(Json.parseToJsonElement(response.bodyAsText()))
+        check(videos.isNotEmpty()) { "YouTube returned no account recommendations. Please refresh or sign in again" }
+        return videos
+    }
+    fun searchRegularVideos(query: String) = extractor.searchVideos(query)
 
     fun getNewPipePlayer(videoId: String): List<Pair<Int, String>> = extractor.newPipePlayer(videoId)
 
@@ -420,7 +435,7 @@ class Ytmusic {
         playlistId: String?,
         cpn: String?,
         signatureTimestamp: Int? = null,
-    ) = httpClient.post("player") {
+    ) = httpClient.post(if (client == WEB) "https://www.youtube.com/youtubei/v1/player" else "player") {
         ytClient(client, setLogin = true)
         setBody(
             PlayerBody(
@@ -646,7 +661,7 @@ class Ytmusic {
         continuation: String? = null,
         countryCode: String? = null,
         setLogin: Boolean = false,
-    ) = httpClient.post("browse") {
+    ) = httpClient.post(if (client == WEB) "https://www.youtube.com/youtubei/v1/browse" else "browse") {
         ytClient(client, if (setLogin) true else cookie != "" && cookie != null, isUsingReferer = false)
 
         if (continuation != null && browseId != null) {
@@ -714,7 +729,7 @@ class Ytmusic {
     suspend fun nextCtoken(
         client: YouTubeClient,
         continuation: String,
-    ) = httpClient.post("browse") {
+    ) = httpClient.post(if (client == WEB) "https://www.youtube.com/youtubei/v1/browse" else "browse") {
         ytClient(client, setLogin = true)
         parameter("ctoken", continuation)
         parameter("continuation", continuation)

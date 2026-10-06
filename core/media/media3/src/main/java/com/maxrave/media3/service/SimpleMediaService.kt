@@ -42,6 +42,7 @@ internal class SimpleMediaService : MediaLibraryService(), KoinComponent {
     private var mediaSession: MediaLibrarySession? = null
     private val binder = MusicBinder()
     private var preparingPlayback = false
+    private var startedForPlayback = false
     private val preparationHandler = Handler(Looper.getMainLooper())
     private val preparationTimeout = Runnable {
         if (preparingPlayback) {
@@ -64,7 +65,7 @@ internal class SimpleMediaService : MediaLibraryService(), KoinComponent {
             if (playback.playWhenReady && playback.mediaItemCount > 0 && prepareForegroundPlayback()) {
                 // A foreground notification alone does not turn a bound service into
                 // a started service. Keep actual playback alive after the UI unbinds.
-                startService(Intent(this@SimpleMediaService, SimpleMediaService::class.java))
+                retainStartedPlayback()
             }
         }
 
@@ -79,6 +80,8 @@ internal class SimpleMediaService : MediaLibraryService(), KoinComponent {
 
     override fun onCreate() {
         super.onCreate()
+        PlaybackDiagnostics.install(this)
+        Logger.playbackEvent("service-created")
         // Media3 owns the foreground lifecycle. A paused player must not keep an
         // ongoing service alive or be promoted by a second notification manager.
         setForegroundServiceTimeoutMs(30_000)
@@ -104,7 +107,7 @@ internal class SimpleMediaService : MediaLibraryService(), KoinComponent {
         mediaSession?.let(::addSession)
         (simpleMediaSessionCallback as? SimpleMediaSessionCallback)?.prepareForPlayback = ::prepareForegroundPlayback
         (simpleMediaSessionCallback as? SimpleMediaSessionCallback)?.cancelPlaybackPreparation = {
-            if (preparingPlayback) stopPlayback()
+            if (preparingPlayback && !simpleMediaServiceHandler.player.playWhenReady) stopPlayback()
         }
         simpleMediaServiceHandler.onUpdateNotification = { buttons ->
             mediaSession?.setMediaButtonPreferences(buttons.map { it.toCommandButton(this) })
@@ -158,6 +161,7 @@ internal class SimpleMediaService : MediaLibraryService(), KoinComponent {
     }
 
     override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
+        Logger.playbackEvent("notification-update state=${session.player.playbackState} intent=${session.player.playWhenReady} items=${session.player.mediaItemCount} required=$startInForegroundRequired")
         // The adapter has not yet swapped in its buffering player. Keep the brief
         // foreground notification until playback intent reaches that delegate.
         if (preparingPlayback && session.player.mediaItemCount == 0 &&
@@ -168,7 +172,7 @@ internal class SimpleMediaService : MediaLibraryService(), KoinComponent {
         )
         super.onUpdateNotification(session, keepForeground)
         if (keepForeground && session.player.playWhenReady && session.player.mediaItemCount > 0) {
-            startService(Intent(this, SimpleMediaService::class.java))
+            retainStartedPlayback()
         }
         if (session.player.mediaItemCount > 0 && session.player.playbackState != Player.STATE_IDLE) {
             preparingPlayback = false
@@ -176,8 +180,22 @@ internal class SimpleMediaService : MediaLibraryService(), KoinComponent {
         }
     }
 
+    private fun retainStartedPlayback() {
+        if (startedForPlayback) return
+        try {
+            startService(Intent(this, SimpleMediaService::class.java))
+            startedForPlayback = true
+        } catch (error: IllegalStateException) {
+            // Media3 still owns foreground playback. Android may reject a redundant
+            // background start while the app is switching tracks or losing focus.
+            Logger.playbackEvent("service-retain-denied type=${error.javaClass.simpleName}")
+        }
+    }
+
     private fun stopPlayback() {
+        Logger.playbackEvent("service-stop preparing=$preparingPlayback intent=${simpleMediaServiceHandler.player.playWhenReady} items=${simpleMediaServiceHandler.player.mediaItemCount}")
         preparingPlayback = false
+        startedForPlayback = false
         preparationHandler.removeCallbacks(preparationTimeout)
         simpleMediaServiceHandler.stopPlaybackSession()
         pauseAllPlayersAndStopSelf()
@@ -203,6 +221,7 @@ internal class SimpleMediaService : MediaLibraryService(), KoinComponent {
     }
 
     override fun onDestroy() {
+        Logger.playbackEvent("service-destroyed intent=${simpleMediaServiceHandler.player.playWhenReady} items=${simpleMediaServiceHandler.player.mediaItemCount} state=${simpleMediaServiceHandler.player.playbackState}")
         (simpleMediaSessionCallback as? SimpleMediaSessionCallback)?.onCarConnectionChanged = {}
         if (::carLyricsPlayer.isInitialized) carLyricsPlayer.close()
         preparationHandler.removeCallbacksAndMessages(null)
@@ -211,7 +230,10 @@ internal class SimpleMediaService : MediaLibraryService(), KoinComponent {
         simpleMediaServiceHandler.onUpdateNotification = {}
         (simpleMediaSessionCallback as? SimpleMediaSessionCallback)?.prepareForPlayback = { false }
         (simpleMediaSessionCallback as? SimpleMediaSessionCallback)?.cancelPlaybackPreparation = {}
-        simpleMediaServiceHandler.stopPlaybackSession()
+        // Destroy only this session view. The DI player belongs to the application;
+        // explicit stop/task-removal already clears it in stopPlayback(). Losing a
+        // service binding must not erase the queue and artwork inside the app.
+        simpleMediaServiceHandler.mayBeSaveRecentSong()
         mediaSession?.release()
         mediaSession = null
         stopForeground(STOP_FOREGROUND_REMOVE)

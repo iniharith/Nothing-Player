@@ -1003,7 +1003,6 @@ internal class MediaServiceHandlerImpl(
                                     continuation = data.second,
                                 ),
                             )
-                            clearMediaItems()
                             currentSong.durationSeconds.let {
                                 songRepository.updateDurationSeconds(it, currentSong.videoId)
                             }
@@ -1113,9 +1112,9 @@ internal class MediaServiceHandlerImpl(
         playWhenReady: Boolean,
     ) {
         stoppingPlaybackSession = false
-        player.clearMediaItems()
+        // setMediaItem replaces the adapter queue itself. Clearing first emits an
+        // empty timeline and stops the session between two user-selected songs.
         player.setMediaItem(mediaItem)
-        player.prepare()
         player.playWhenReady = playWhenReady
     }
 
@@ -1170,7 +1169,6 @@ internal class MediaServiceHandlerImpl(
                 songRepository.insertSong(firstPlayedTrack.toSongEntity()).collect {
                     Logger.w(TAG, "Inserted song: ${firstPlayedTrack.title}")
                 }
-                clearMediaItems()
                 firstPlayedTrack.durationSeconds?.let {
                     songRepository.updateDurationSeconds(it, firstPlayedTrack.videoId)
                 }
@@ -2096,7 +2094,6 @@ internal class MediaServiceHandlerImpl(
         songRepository.insertSong(track.toSongEntity()).singleOrNull()?.let {
             Logger.d(TAG, "Inserted song: ${track.title}")
         }
-        clearMediaItems()
         track.durationSeconds?.let {
             songRepository.updateDurationSeconds(it, track.videoId)
         }
@@ -2324,6 +2321,7 @@ internal class MediaServiceHandlerImpl(
         }
 
     override fun stopPlaybackSession() {
+        Logger.playbackEvent("handler-stop-session caller=${Throwable().stackTrace.take(8).joinToString { it.className + "." + it.methodName }}")
         if (stoppingPlaybackSession) return
         mayBeSaveRecentSong(runBlocking = true)
         mayBeSavePlaybackState()
@@ -2501,6 +2499,7 @@ internal class MediaServiceHandlerImpl(
         mediaItem: GenericMediaItem?,
         reason: Int,
     ) {
+        Logger.playbackEvent("track-transition id=${mediaItem?.mediaId} intent=${player.playWhenReady} items=${player.mediaItemCount} reason=$reason")
         Logger.w(TAG, "Checking current state before transition ${simpleMediaState.value}")
         val lastPlayed = nowPlayingState.value.songEntity
         val currentState = simpleMediaState.value

@@ -38,6 +38,9 @@ val viewModelModule =
                 get(),
             )
         }
+        single(org.koin.core.qualifier.named("youtubeVideos")) {
+            SearchViewModel(get(), get(), get()).apply { regularYouTubeVideos = true; setSearchType(com.nothingplayer.app.viewModel.SearchType.VIDEOS) }
+        }
         single {
             SearchViewModel(
                 get(),

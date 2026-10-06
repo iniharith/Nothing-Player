@@ -40,7 +40,7 @@ internal class MergingMediaSourceFactory(
                 mediaItem
                     .buildUpon()
                     .setMediaId("${MERGING_DATA_TYPE.VIDEO}${mediaItem.mediaId}")
-                    .setCustomCacheKey("${MERGING_DATA_TYPE.VIDEO}${mediaItem.mediaId}")
+                    .setCustomCacheKey("${MERGING_DATA_TYPE.VIDEO}${mediaItem.mediaId}:quality=${runBlocking(Dispatchers.IO) { dataStoreManager.videoQuality.first() }}")
                     .build()
             return MergingMediaSource(
                 defaultMediaSourceFactory.createMediaSource(videoItem),

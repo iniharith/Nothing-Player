@@ -21,6 +21,8 @@ android {
     namespace = "com.maxrave.media3"
     compileSdk = 37
 
+    testOptions.unitTests.isIncludeAndroidResources = true
+
     defaultConfig {
         minSdk = 26
 
@@ -48,6 +50,7 @@ dependencies {
     implementation(libs.core.ktx)
     implementation(libs.appcompat)
     testImplementation(libs.junit)
+    testImplementation("org.robolectric:robolectric:4.17")
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.espresso.core)
 

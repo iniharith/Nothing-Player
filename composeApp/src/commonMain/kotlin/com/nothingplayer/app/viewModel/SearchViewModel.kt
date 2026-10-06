@@ -209,7 +209,10 @@ class SearchViewModel(
         }
     }
 
+    var regularYouTubeVideos = false
+
     fun searchAll(query: String) {
+        if (regularYouTubeVideos) { searchVideos(query); return }
         _searchScreenUIState.value = SearchScreenUIState.Loading
         viewModelScope.launch {
             var song = ArrayList<SongsResult>()
@@ -261,7 +264,7 @@ class SearchViewModel(
                 }
             val job5 =
                 launch {
-                    searchRepository.getSearchDataVideo(query).collect { values ->
+                    (if (regularYouTubeVideos) searchRepository.getRegularYouTubeVideos(query) else searchRepository.getSearchDataVideo(query)).collect { values ->
                         when (values) {
                             is Resource.Success -> values.data?.let { video.addAll(it) }
                             is Resource.Error -> {}
@@ -488,7 +491,8 @@ class SearchViewModel(
     fun searchVideos(query: String) {
         _searchScreenUIState.value = SearchScreenUIState.Loading
         viewModelScope.launch {
-            searchRepository.getSearchDataVideo(query).collect { values ->
+            if (regularYouTubeVideos) dataStoreManager.setWatchVideoInsteadOfPlayingAudio(true)
+            (if (regularYouTubeVideos) searchRepository.getRegularYouTubeVideos(query) else searchRepository.getSearchDataVideo(query)).collect { values ->
                 when (values) {
                     is Resource.Success -> {
                         values.data?.let { videosList ->

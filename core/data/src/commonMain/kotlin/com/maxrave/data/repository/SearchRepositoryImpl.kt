@@ -80,6 +80,20 @@ internal class SearchRepositoryImpl(
             }
         }.flowOn(Dispatchers.IO)
 
+    override fun getRegularYouTubeVideos(query: String): Flow<Resource<ArrayList<VideosResult>>> = flow {
+        (if (query.isBlank()) youTube.accountHomeVideos() else youTube.searchRegularVideos(query)).onSuccess { videos ->
+            emit(Resource.Success(ArrayList(videos.map { video ->
+                VideosResult(
+                    artists = listOf(com.maxrave.domain.data.model.searchResult.songs.Artist(null, video.channel)),
+                    category = "YouTube", duration = "${video.durationSeconds / 60}:${(video.durationSeconds % 60).toString().padStart(2, '0')}",
+                    durationSeconds = video.durationSeconds, resultType = "video",
+                    thumbnails = listOf(com.maxrave.domain.data.model.searchResult.songs.Thumbnail(360, video.thumbnail, 640)),
+                    title = video.title, videoId = video.id, videoType = "VIDEO", views = null, year = "",
+                )
+            })))
+        }.onFailure { emit(Resource.Error(it.message ?: "YouTube search failed")) }
+    }.flowOn(Dispatchers.IO)
+
     override fun getSearchDataVideo(query: String): Flow<Resource<ArrayList<VideosResult>>> =
         flow {
             runCatching {

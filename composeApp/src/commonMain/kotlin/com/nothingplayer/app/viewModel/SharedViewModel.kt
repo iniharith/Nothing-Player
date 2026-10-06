@@ -720,68 +720,13 @@ class SharedViewModel(
         }
     }
 
-    fun loadMediaItemFromTrack(
-        track: Track,
-        type: String,
-        index: Int? = null,
-    ) {
+    fun loadMediaItemFromTrack(track: Track, type: String, index: Int? = null) {
         quality = runBlocking { dataStoreManager.quality.first() }
         viewModelScope.launch {
-            mediaPlayerHandler.clearMediaItems()
-            songRepository.insertSong(track.toSongEntity()).lastOrNull()?.let {
-                println("insertSong: $it")
-                songRepository
-                    .getSongById(track.videoId)
-                    .collect { songEntity ->
-                        if (songEntity != null) {
-                            Logger.w("Check like", "loadMediaItemFromTrack ${songEntity.liked}")
-                            _liked.value = songEntity.liked
-                        }
-                    }
-            }
-            track.durationSeconds?.let {
-                songRepository.updateDurationSeconds(
-                    it,
-                    track.videoId,
-                )
-            }
-            withContext(Dispatchers.Main) {
-                mediaPlayerHandler.addMediaItem(track.toGenericMediaItem(), playWhenReady = type != RECOVER_TRACK_QUEUE)
-            }
-
-            when (type) {
-                SONG_CLICK -> {
-                    mediaPlayerHandler.getRelated(track.videoId)
-                }
-
-                VIDEO_CLICK -> {
-                    mediaPlayerHandler.getRelated(track.videoId)
-                }
-
-                SHARE -> {
-                    mediaPlayerHandler.getRelated(track.videoId)
-                }
-
-                PLAYLIST_CLICK -> {
-                    if (index == null) {
-//                                        fetchSourceFromQueue(downloaded = downloaded ?: 0)
-                        loadPlaylistOrAlbum(index = 0)
-                    } else {
-//                                        fetchSourceFromQueue(index!!, downloaded = downloaded ?: 0)
-                        loadPlaylistOrAlbum(index = index)
-                    }
-                }
-
-                ALBUM_CLICK -> {
-                    if (index == null) {
-//                                        fetchSourceFromQueue(downloaded = downloaded ?: 0)
-                        loadPlaylistOrAlbum(index = 0)
-                    } else {
-//                                        fetchSourceFromQueue(index!!, downloaded = downloaded ?: 0)
-                        loadPlaylistOrAlbum(index = index)
-                    }
-                }
-            }
+            // Keep the old item until the handler atomically replaces it. Room's
+            // song flow never completes, so read one snapshot before starting.
+            songRepository.getSongById(track.videoId).firstOrNull()?.let { _liked.value = it.liked }
+            mediaPlayerHandler.loadMediaItem(track, type, index)
         }
     }
 

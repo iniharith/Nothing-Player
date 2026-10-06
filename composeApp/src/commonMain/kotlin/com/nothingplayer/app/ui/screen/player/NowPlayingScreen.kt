@@ -1246,6 +1246,7 @@ fun NowPlayingScreenContent(
                                                     }
                                                 }
                                             }
+                                            com.nothingplayer.app.expect.ui.VideoPlaybackSettings(Modifier.fillMaxSize())
                                         }
                                     }
                                 } else if (pageTrack != null) {

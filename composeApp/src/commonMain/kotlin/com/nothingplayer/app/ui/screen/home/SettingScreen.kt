@@ -2253,6 +2253,7 @@ fun SettingScreen(
         }
         item(key = "about_us") {
             Column {
+                com.nothingplayer.app.expect.PlaybackDiagnosticsButton()
                 Text(
                     text = stringResource(Res.string.about_us),
                     style = typo().labelMedium,

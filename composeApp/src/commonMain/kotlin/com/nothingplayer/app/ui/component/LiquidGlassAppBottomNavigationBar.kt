@@ -4,6 +4,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.navigation.NavController
 import com.nothingplayer.app.expect.ui.PlatformBackdrop
+import com.nothingplayer.app.ui.icon.PlayArrow
+import nothingplayer.composeapp.generated.resources.videos
 import com.nothingplayer.app.ui.icon.Home
 import com.nothingplayer.app.ui.icon.LibraryMusic
 import com.nothingplayer.app.ui.icon.Search
@@ -59,6 +61,8 @@ sealed class BottomNavScreen(
             )
         },
     )
+
+    data object Videos : BottomNavScreen(3, com.nothingplayer.app.ui.navigation.destination.search.VideosDestination, Res.string.videos, { Icon(SimpIcons.PlayArrow, contentDescription = null) })
 
     data object Library : BottomNavScreen(
         ordinal = 2,

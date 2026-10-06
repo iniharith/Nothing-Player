@@ -746,6 +746,7 @@ fun FullscreenPlayer(
                     }
                 }
             }
+            com.nothingplayer.app.expect.ui.VideoPlaybackSettings(Modifier.fillMaxSize(), alignRight = true)
             if (showBottom) {
                 NowPlayingBottomSheet(
                     onDismiss = { showBottom = false },

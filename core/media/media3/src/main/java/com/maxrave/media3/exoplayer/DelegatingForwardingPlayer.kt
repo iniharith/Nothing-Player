@@ -22,7 +22,7 @@ private const val TAG = "DelegatingForwardingPlayer"
  *
  * Pattern: Track all externally added listeners, then during swap:
  * 1. Remove them via [ForwardingPlayer.removeListener] (cleans up ForwardingListener wrappers)
- * 2. Swap the internal `player` field via reflection
+ * 2. Switch the mutable routing target
  * 3. Re-add them via [ForwardingPlayer.addListener] (creates new ForwardingListener wrappers for new delegate)
  *
  * Additionally, since each underlying ExoPlayer only has a single MediaItem,
@@ -33,21 +33,32 @@ private const val TAG = "DelegatingForwardingPlayer"
  * next/previous buttons in the system notification.
  */
 @UnstableApi
-internal class DelegatingForwardingPlayer(
-    initialDelegate: Player,
-) : ForwardingPlayer(initialDelegate) {
-    companion object {
-        private val PLAYER_FIELD: java.lang.reflect.Field? =
-            try {
-                ForwardingPlayer::class.java.getDeclaredField("player").apply {
-                    isAccessible = true
-                }
-            } catch (e: Exception) {
-                Logger.e(TAG, "Failed to access ForwardingPlayer.player field", e)
-                null
-            }
-    }
+internal class DelegatingForwardingPlayer private constructor(
+    private val routing: PlayerRouting,
+) : ForwardingPlayer(routing.proxy) {
+    constructor(initialDelegate: Player) : this(PlayerRouting(initialDelegate))
 
+    private class PlayerRouting(var target: Player) : java.lang.reflect.InvocationHandler {
+        val proxy: Player = java.lang.reflect.Proxy.newProxyInstance(
+            Player::class.java.classLoader, arrayOf(Player::class.java), this,
+        ) as Player
+
+        override fun invoke(proxy: Any, method: java.lang.reflect.Method, args: Array<out Any?>?): Any? {
+            if (method.declaringClass == Any::class.java) {
+                return when (method.name) {
+                    "equals" -> proxy === args?.firstOrNull()
+                    "hashCode" -> System.identityHashCode(proxy)
+                    "toString" -> "Playback delegate router"
+                    else -> null
+                }
+            }
+            return try {
+                method.invoke(target, *(args ?: emptyArray()))
+            } catch (error: java.lang.reflect.InvocationTargetException) {
+                throw error.targetException
+            }
+        }
+    }
     // ========== Playlist Navigation Provider ==========
 
     /**
@@ -172,7 +183,11 @@ internal class DelegatingForwardingPlayer(
 
     var transientAudioFocusLoss = false
 
-    override fun getPlayWhenReady(): Boolean = transientAudioFocusLoss || super.getPlayWhenReady()
+    // The adapter owns playback intent; a replacement ExoPlayer starts paused.
+    var playbackIntent: (() -> Boolean)? = null
+    var preparingNextTrack = false
+
+    override fun getPlayWhenReady(): Boolean = playbackIntent?.invoke() ?: (transientAudioFocusLoss || super.getPlayWhenReady())
 
     override fun getPlaybackSuppressionReason(): Int =
         if (transientAudioFocusLoss) Player.PLAYBACK_SUPPRESSION_REASON_TRANSIENT_AUDIO_FOCUS_LOSS
@@ -181,6 +196,9 @@ internal class DelegatingForwardingPlayer(
 
     override fun getPlaybackState(): Int {
         val state = super.getPlaybackState()
+        if (preparingNextTrack && playWhenReady && (state == Player.STATE_IDLE || state == Player.STATE_ENDED)) {
+            return Player.STATE_BUFFERING
+        }
         if (state == Player.STATE_ENDED && suppressPlaybackEnded) {
             return Player.STATE_BUFFERING
         }
@@ -191,15 +209,35 @@ internal class DelegatingForwardingPlayer(
 
     // Track all externally registered listeners so we can re-register them after delegate swap
     private val trackedListeners = mutableListOf<Player.Listener>()
+    private val listenerBridges = java.util.IdentityHashMap<Player.Listener, Player.Listener>()
 
     override fun addListener(listener: Player.Listener) {
+        if (listenerBridges.containsKey(listener)) return
+        val bridge = object : Player.Listener by listener {
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                listener.onPlayWhenReadyChanged(this@DelegatingForwardingPlayer.playWhenReady, reason)
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                listener.onPlaybackStateChanged(this@DelegatingForwardingPlayer.playbackState)
+            }
+
+            override fun onPlaybackSuppressionReasonChanged(playbackSuppressionReason: Int) {
+                listener.onPlaybackSuppressionReasonChanged(this@DelegatingForwardingPlayer.playbackSuppressionReason)
+            }
+
+            override fun onEvents(player: Player, events: Player.Events) {
+                listener.onEvents(this@DelegatingForwardingPlayer, events)
+            }
+        }
+        listenerBridges[listener] = bridge
         trackedListeners.add(listener)
-        super.addListener(listener)
+        super.addListener(bridge)
     }
 
     override fun removeListener(listener: Player.Listener) {
         trackedListeners.remove(listener)
-        super.removeListener(listener)
+        listenerBridges.remove(listener)?.let { super.removeListener(it) }
     }
 
     // ========== Video Surface Tracking ==========
@@ -304,19 +342,19 @@ internal class DelegatingForwardingPlayer(
         when (val output = currentVideoOutput) {
             is VideoOutput.SurfaceViewOutput -> {
                 Logger.d(TAG, "Re-attaching SurfaceView to new delegate")
-                wrappedPlayer.setVideoSurfaceView(output.surfaceView)
+                routing.target.setVideoSurfaceView(output.surfaceView)
             }
             is VideoOutput.TextureViewOutput -> {
                 Logger.d(TAG, "Re-attaching TextureView to new delegate")
-                wrappedPlayer.setVideoTextureView(output.textureView)
+                routing.target.setVideoTextureView(output.textureView)
             }
             is VideoOutput.SurfaceOutput -> {
                 Logger.d(TAG, "Re-attaching Surface to new delegate")
-                wrappedPlayer.setVideoSurface(output.surface)
+                routing.target.setVideoSurface(output.surface)
             }
             is VideoOutput.SurfaceHolderOutput -> {
                 Logger.d(TAG, "Re-attaching SurfaceHolder to new delegate")
-                wrappedPlayer.setVideoSurfaceHolder(output.surfaceHolder)
+                routing.target.setVideoSurfaceHolder(output.surfaceHolder)
             }
             null -> {
                 // No video output to re-attach
@@ -418,35 +456,32 @@ internal class DelegatingForwardingPlayer(
      * from the old delegate to the new one.
      */
     fun swapDelegate(newDelegate: Player) {
-        if (wrappedPlayer === newDelegate) return
+        if (routing.target === newDelegate) return
 
-        val field = PLAYER_FIELD
-            ?: throw IllegalStateException("Cannot swap delegate - reflection on ForwardingPlayer.player field failed")
-
-        // 1. Snapshot current listeners
+// 1. Snapshot current listeners
         val listenersToReAdd = trackedListeners.toList()
 
         // 2. Clear video surface from OLD delegate BEFORE swapping.
         //    The native surface can only be connected to one MediaCodec at a time.
         //    If we don't clear it here, the new player's MediaCodec.setSurface() will fail
         //    with "already connected" → IllegalArgumentException crash.
-        clearVideoOutputFromPlayer(wrappedPlayer)
+        clearVideoOutputFromPlayer(routing.target)
 
         // 3. Remove all listeners from old delegate (ForwardingPlayer removes ForwardingListener wrappers)
         listenersToReAdd.forEach { listener ->
             try {
-                super.removeListener(listener)
+                listenerBridges[listener]?.let { super.removeListener(it) }
             } catch (e: Exception) {
                 Logger.w(TAG, "Error removing listener during swap: ${e.message}")
             }
         }
 
-        // 4. Swap the private final `player` field
-        field.set(this, newDelegate)
+        // 4. Switch the routing target without mutating Media3 final fields
+        routing.target = newDelegate
 
         // 5. Re-add all listeners (ForwardingPlayer creates new ForwardingListener wrappers for new delegate)
         listenersToReAdd.forEach { listener ->
-            super.addListener(listener)
+            listenerBridges[listener]?.let { super.addListener(it) }
         }
 
         // 6. Re-attach video surface to the new delegate
@@ -455,8 +490,8 @@ internal class DelegatingForwardingPlayer(
         reAttachVideoOutput()
 
         // 6. Verify
-        if (wrappedPlayer !== newDelegate) {
-            Logger.e(TAG, "Delegate swap verification FAILED - wrappedPlayer is not the new delegate!")
+        if (routing.target !== newDelegate) {
+            Logger.e(TAG, "Delegate swap verification FAILED - routing.target is not the new delegate!")
         } else {
             Logger.d(TAG, "Delegate swapped successfully")
         }
@@ -479,7 +514,7 @@ internal class DelegatingForwardingPlayer(
      * MediaSession uses these events to update the system notification metadata.
      */
     fun notifyMediaItemChanged() {
-        val player = wrappedPlayer
+        val player = routing.target
         val mediaItem = player.currentMediaItem ?: MediaItem.EMPTY
         val metadata = player.mediaMetadata
         val commands = getAvailableCommands()

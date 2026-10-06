@@ -256,10 +256,11 @@ private fun provideResolvingDataSourceFactory(
     // upstream URL; a fully broken entry only costs one playback error before the normal
     // resolve path takes over again.
     return ResolvingDataSource.Factory(cacheDataSourceFactory) { dataSpec ->
-        val mediaId = dataSpec.key ?: error("No media id")
+        val cacheKey = dataSpec.key ?: throw java.io.IOException("No media id")
+        val mediaId = cacheKey.substringBefore(":quality=")
         Logger.w("Stream", mediaId)
         Logger.w("Stream", mediaId.startsWith(MERGING_DATA_TYPE.VIDEO).toString())
-        if (downloadCache.isFullyCached(mediaId, dataSpec.position)) {
+        if (downloadCache.isFullyCached(cacheKey, dataSpec.position)) {
             // Only on the first chunk: the subrange below makes the resolver run once per
             // chunk, and updateFormat is a fire-and-forget youTube.player() call with no
             // in-flight dedup, so leaving it ungated would fan out one request per 5 MiB.
@@ -277,7 +278,7 @@ private fun provideResolvingDataSourceFactory(
             Logger.w("Stream", "Downloaded $mediaId")
             return@Factory dataSpec.subrange(dataSpec.uriPositionOffset, chunkLength)
         }
-        if (playerCache.isFullyCached(mediaId, dataSpec.position)) {
+        if (playerCache.isFullyCached(cacheKey, dataSpec.position)) {
             // See the note above: once per track, not once per chunk.
             if (dataSpec.position == 0L) {
                 coroutineScope.launch(Dispatchers.IO) {
@@ -307,7 +308,7 @@ private fun provideResolvingDataSourceFactory(
             // cache that shrinks under us falls back to resolving a real URL.
             return@Factory dataSpec.subrange(dataSpec.uriPositionOffset, chunkLength)
         }
-        resolvedStreams[mediaId]?.let { cached ->
+        resolvedStreams[cacheKey]?.let { cached ->
             Logger.d("Stream", "Resolved $mediaId from memory cache")
             return@Factory dataSpec.withUri(cached.toUri()).subrange(dataSpec.uriPositionOffset, chunkLength)
         }
@@ -316,12 +317,12 @@ private fun provideResolvingDataSourceFactory(
         runBlocking(Dispatchers.IO) {
             if (mediaId.contains(MERGING_DATA_TYPE.VIDEO)) {
                 val id = mediaId.removePrefix(MERGING_DATA_TYPE.VIDEO)
-                (streamRepository.getNewFormat(mediaId).firstOrNull() ?: streamRepository.getNewFormat(id).firstOrNull())?.let {
+                (if (cacheKey.contains(":quality=")) null else streamRepository.getNewFormat(mediaId).firstOrNull())?.let {
                     val videoUrl = it.videoUrl
                     if (videoUrl != null && it.expiredTime > now()) {
                         Logger.w("Stream", "Video from format")
                         dataSpecReturn = dataSpec.withUri(videoUrl.toUri()).subrange(dataSpec.uriPositionOffset, chunkLength)
-                        resolvedStreams.put(mediaId, videoUrl, it.expiredTime)
+                        resolvedStreams.put(cacheKey, videoUrl, it.expiredTime)
                         resolved = true
                         return@runBlocking
                     }
@@ -336,7 +337,7 @@ private fun provideResolvingDataSourceFactory(
                     ?.let {
                         Logger.w("Stream", "Video")
                         dataSpecReturn = dataSpec.withUri(it.toUri()).subrange(dataSpec.uriPositionOffset, chunkLength)
-                        resolvedStreams.put(mediaId, it, now().plusSeconds(RESOLVED_STREAM_TTL_SECONDS))
+                        resolvedStreams.put(cacheKey, it, now().plusSeconds(RESOLVED_STREAM_TTL_SECONDS))
                         resolved = true
                     }
             } else {
@@ -347,7 +348,7 @@ private fun provideResolvingDataSourceFactory(
                         // The media open verifies the URL. A separate HTTP probe costs a
                         // round trip on every track; source-error recovery invalidates it.
                         dataSpecReturn = dataSpec.withUri(audioUrl.toUri()).subrange(dataSpec.uriPositionOffset, chunkLength)
-                        resolvedStreams.put(mediaId, audioUrl, it.expiredTime)
+                        resolvedStreams.put(cacheKey, audioUrl, it.expiredTime)
                         resolved = true
                         return@runBlocking
                     }
@@ -362,7 +363,7 @@ private fun provideResolvingDataSourceFactory(
                     ?.let {
                         Logger.w("Stream", "Audio")
                         dataSpecReturn = dataSpec.withUri(it.toUri()).subrange(dataSpec.uriPositionOffset, chunkLength)
-                        resolvedStreams.put(mediaId, it, now().plusSeconds(RESOLVED_STREAM_TTL_SECONDS))
+                        resolvedStreams.put(cacheKey, it, now().plusSeconds(RESOLVED_STREAM_TTL_SECONDS))
                         resolved = true
                     }
             }
