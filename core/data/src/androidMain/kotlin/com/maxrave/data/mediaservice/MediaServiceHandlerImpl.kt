@@ -41,6 +41,7 @@ import com.maxrave.domain.extension.isVideo
 import com.maxrave.domain.extension.now
 import com.maxrave.domain.extension.toGenericMediaItem
 import com.maxrave.domain.extension.toSongEntity
+import com.maxrave.domain.manager.*
 import com.maxrave.domain.manager.DataStoreManager
 import com.maxrave.domain.manager.DataStoreManager.Values.FALSE
 import com.maxrave.domain.manager.DataStoreManager.Values.TRUE
@@ -234,6 +235,7 @@ internal class MediaServiceHandlerImpl(
     private var toggleLikeJob: Job? = null
 
     private var loadJob: Job? = null
+    private var queueRestoreJob: Job? = null
 
     private var relatedJob: Job? = null
 
@@ -1053,14 +1055,12 @@ internal class MediaServiceHandlerImpl(
                     _sleepTimerState.update {
                         it.copy(isDone = false, timeRemaining = -1)
                     }
-                    // Poll until player duration is available (may be -1 initially)
-                    var duration = player.duration
-                    while (duration <= 0L) {
-                        delay(500)
-                        duration = player.duration
+                    val timedId = player.currentMediaItem?.mediaId
+                    while (true) {
+                        val duration = player.duration
+                        if (player.currentMediaItem?.mediaId != timedId || player.playbackState == PlayerConstants.STATE_ENDED || (duration > 0 && player.currentPosition >= duration - 250)) break
+                        delay(100)
                     }
-                    val remaining = (duration - player.currentPosition).coerceAtLeast(0L)
-                    delay(remaining)
                     player.pause()
                     _sleepTimerState.update {
                         it.copy(isDone = true, timeRemaining = 0)
@@ -1607,7 +1607,7 @@ internal class MediaServiceHandlerImpl(
             thumbUrl = Regex("([=-][wh])\\d+").replace(thumbUrl, "$1544")
             val artistName: String = track.artists.toListName().connectArtists()
             val isSong =
-                (
+                track.videoType != "VIDEO" && (
                     track.thumbnails?.lastOrNull()?.height != 0 &&
                         track.thumbnails?.lastOrNull()?.height == track.thumbnails?.lastOrNull()?.width &&
                         track.thumbnails?.lastOrNull()?.height != null
@@ -1744,7 +1744,7 @@ internal class MediaServiceHandlerImpl(
                         ?: "http://i.ytimg.com/vi/${track.videoId}/maxresdefault.jpg"
                 thumbUrl = Regex("([=-][wh])\\d+").replace(thumbUrl, "$1544")
                 val isSong =
-                    (
+                    track.videoType != "VIDEO" && (
                         track.thumbnails?.lastOrNull()?.height != 0 &&
                             track.thumbnails?.lastOrNull()?.height == track.thumbnails?.lastOrNull()?.width &&
                             track.thumbnails?.lastOrNull()?.height != null
@@ -1969,7 +1969,7 @@ internal class MediaServiceHandlerImpl(
         thumbUrl = Regex("([=-][wh])\\d+").replace(thumbUrl, "$1544")
         val artistName: String = track.artists.toListName().connectArtists()
         val isSong =
-            (
+            track.videoType != "VIDEO" && (
                 track.thumbnails?.lastOrNull()?.height != 0 &&
                     track.thumbnails?.lastOrNull()?.height == track.thumbnails?.lastOrNull()?.width &&
                     track.thumbnails?.lastOrNull()?.height != null
@@ -2080,6 +2080,7 @@ internal class MediaServiceHandlerImpl(
         type: String,
         index: Int?,
     ) {
+        queueRestoreJob?.cancel()
         val track =
             when (anyTrack) {
                 is Track -> anyTrack
@@ -2097,7 +2098,13 @@ internal class MediaServiceHandlerImpl(
         track.durationSeconds?.let {
             songRepository.updateDurationSeconds(it, track.videoId)
         }
-        addMediaItem(track.toGenericMediaItem(), playWhenReady = type != RECOVER_TRACK_QUEUE)
+        if (type == VIDEO_CLICK) {
+            dataStoreManager.setWatchVideoInsteadOfPlayingAudio(true)
+            val resume = dataStoreManager.videoWatchHistory().first().firstOrNull { it.track.videoId == track.videoId }?.resumePositionMs ?: 0
+            stoppingPlaybackSession = false
+            player.setMediaItem(track.copy(videoType = "VIDEO").toGenericMediaItem(), resume)
+            player.playWhenReady = true
+        } else addMediaItem(track.toGenericMediaItem(), playWhenReady = type != RECOVER_TRACK_QUEUE)
         when (type) {
             SONG_CLICK, VIDEO_CLICK, SHARE -> {
                 getRelated(track.videoId)
@@ -2119,6 +2126,7 @@ internal class MediaServiceHandlerImpl(
     override fun getProgress(): Long = player.currentPosition
 
     override fun mayBeSaveRecentSong(runBlocking: Boolean) {
+        saveVideoHistory()
         if (stoppingPlaybackSession) return
         // Read one snapshot before DataStore/Room suspend or teardown clears the player.
         // SongEntity can still describe the previous track while the new metadata loads.
@@ -2138,6 +2146,7 @@ internal class MediaServiceHandlerImpl(
             suspend {
                 recentSaveMutex.withLock {
                     if (dataStoreManager.saveRecentSongAndQueue.first() == TRUE && revision == recentSaveRevision.get()) {
+                        dataStoreManager.putString("recent_media_type", mediaItem.metadata.description.orEmpty())
                         dataStoreManager.saveRecentSong(videoId, position)
                         dataStoreManager.setPlaylistFromSaved(playlistName)
                         songRepository.recoverQueue(savedTracks)
@@ -2160,7 +2169,19 @@ internal class MediaServiceHandlerImpl(
      * cheap enough to call every few seconds while a track plays uninterrupted. The saved
      * media id + position are what [mayBeRestoreQueue] reads to resume after a process kill.
      */
+    private fun saveVideoHistory() {
+        if (player.playbackState != PlayerConstants.STATE_READY && player.playbackState != PlayerConstants.STATE_ENDED) return
+        val item = player.currentMediaItem ?: return
+        if (item.metadata.description != MERGING_DATA_TYPE.VIDEO) return
+        val id = item.mediaId.removePrefix(MERGING_DATA_TYPE.VIDEO)
+        val track = _queueData.value.data.listTracks.firstOrNull { it.videoId == id }
+            ?: nowPlayingState.value.songEntity?.takeIf { it.videoId == id }?.toTrack() ?: return
+        val entry = VideoWatchEntry(track, player.contentPosition.coerceAtLeast(0), getPlayerDuration(), System.currentTimeMillis())
+        coroutineScope.launch(Dispatchers.IO) { dataStoreManager.recordVideoWatch(entry) }
+    }
+
     private fun mayBeSaveRecentPosition() {
+        saveVideoHistory()
         if (stoppingPlaybackSession) return
         val mediaItem = player.currentMediaItem ?: return
         val videoId = mediaItem.mediaId.removePrefix(MERGING_DATA_TYPE.VIDEO).takeIf { it.isNotBlank() } ?: return
@@ -2272,9 +2293,14 @@ internal class MediaServiceHandlerImpl(
     }
 
     override fun mayBeRestoreQueue() {
-        coroutineScope.launch {
+        queueRestoreJob?.cancel()
+        queueRestoreJob = coroutineScope.launch {
+            if (player.mediaItemCount > 0) return@launch
             if (dataStoreManager.saveRecentSongAndQueue.first() == TRUE) {
-                val currentPlayingTrack = songRepository.getSongById(dataStoreManager.recentMediaId.first()).lastOrNull()?.toTrack()
+                val savedMediaType = dataStoreManager.getString("recent_media_type").first()
+                val currentPlayingTrack = songRepository.getSongById(dataStoreManager.recentMediaId.first()).firstOrNull()?.toTrack()?.let {
+                    if (savedMediaType == MERGING_DATA_TYPE.VIDEO) it.copy(videoType = "VIDEO") else it
+                }
                 if (currentPlayingTrack != null) {
                     // Snapshot the position before touching the player: loading the queue fires
                     // onMediaItemTransition -> mayBeSaveRecentSong, which rewrites the stored
@@ -2283,7 +2309,7 @@ internal class MediaServiceHandlerImpl(
                     val savedTracks =
                         songRepository
                             .getSavedQueue()
-                            .singleOrNull()
+                            .firstOrNull()
                             ?.firstOrNull()
                             ?.listTrack
                             .orEmpty()
@@ -2300,6 +2326,7 @@ internal class MediaServiceHandlerImpl(
                         } else {
                             savedTracks.toCollection(arrayListOf())
                         }
+                    if (player.mediaItemCount > 0) return@launch
                     setQueueData(
                         QueueData.Data(
                             listTracks = listTracks,

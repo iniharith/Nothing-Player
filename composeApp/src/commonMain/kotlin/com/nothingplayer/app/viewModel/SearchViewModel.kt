@@ -10,6 +10,10 @@ import com.maxrave.domain.data.model.searchResult.songs.SongsResult
 import com.maxrave.domain.data.model.mood.Mood
 import com.maxrave.domain.data.model.searchResult.videos.VideosResult
 import com.maxrave.domain.data.type.SearchResultType
+import com.maxrave.domain.manager.*
+import com.maxrave.domain.data.model.browse.album.Track
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import com.maxrave.domain.manager.DataStoreManager
 import com.maxrave.domain.repository.HomeRepository
 import com.maxrave.domain.repository.SearchRepository
@@ -18,6 +22,8 @@ import com.maxrave.domain.utils.toQueryList
 import com.maxrave.logger.LogLevel
 import com.maxrave.logger.Logger
 import com.nothingplayer.app.viewModel.base.BaseViewModel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -44,6 +50,9 @@ data class SearchScreenState(
     val searchAllResult: List<SearchResultType> = emptyList(),
     val searchSongsResult: List<SongsResult> = emptyList(),
     val searchVideosResult: List<VideosResult> = emptyList(),
+    val videoContinuation: String? = null,
+    val videosLoadingMore: Boolean = false,
+    val videosPageError: String? = null,
     val searchAlbumsResult: List<AlbumsResult> = emptyList(),
     val searchArtistsResult: List<ArtistsResult> = emptyList(),
     val searchPlaylistsResult: List<PlaylistsResult> = emptyList(),
@@ -488,7 +497,86 @@ class SearchViewModel(
         }
     }
 
+    val videoHistory = dataStoreManager.videoWatchHistory().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    private var videoFilters = VideoFeedFilters()
+    private var unfilteredVideos = emptyList<VideosResult>()
+    private fun filteredVideos(): List<VideosResult> = unfilteredVideos.filter { videoFilters.allows(it.videoId, it.artists?.joinToString(" • ") { artist -> artist.name }.orEmpty()) }
+    fun hideVideo(track: Track) { viewModelScope.launch { dataStoreManager.hideFeedVideo(track.videoId) } }
+    fun hideChannel(track: Track) { viewModelScope.launch { dataStoreManager.hideFeedChannel(track.artists?.joinToString(" • ") { it.name }.orEmpty()) } }
+
+    init {
+        viewModelScope.launch {
+            dataStoreManager.videoFeedFilters().collect { filters ->
+                videoFilters = filters
+                if (regularYouTubeVideos) _searchScreenState.update { it.copy(searchVideosResult = filteredVideos()) }
+            }
+        }
+    }
+
+    private var videoPageJob: Job? = null
+    private var videoPageQuery = ""
+    private var videoPageGeneration = 0
+
+    private fun searchRegularVideos(query: String) {
+        videoPageJob?.cancel()
+        val generation = ++videoPageGeneration
+        videoPageQuery = query
+        unfilteredVideos = emptyList()
+        _searchScreenState.update { it.copy(searchType = SearchType.VIDEOS, searchVideosResult = emptyList(), videoContinuation = null, videosLoadingMore = false, videosPageError = null) }
+        _searchScreenUIState.value = SearchScreenUIState.Loading
+        videoPageJob = viewModelScope.launch {
+            searchRepository.getRegularYouTubeVideoPage(query).collect { result ->
+                if (generation != videoPageGeneration) return@collect
+                when (result) {
+                    is Resource.Success -> {
+                        val page = result.data ?: return@collect
+                        unfilteredVideos = page.videos.distinctBy { it.videoId }
+                        _searchScreenState.update { it.copy(searchVideosResult = filteredVideos(), videoContinuation = page.continuation) }
+                        _searchScreenUIState.value = SearchScreenUIState.Success
+                    }
+                    is Resource.Error -> _searchScreenUIState.value = SearchScreenUIState.Error
+                }
+            }
+        }
+    }
+
+    fun loadMoreVideos() {
+        if (!regularYouTubeVideos || _searchScreenUIState.value != SearchScreenUIState.Success) return
+        val state = _searchScreenState.value
+        val token = state.videoContinuation ?: return
+        if (state.videosLoadingMore) return
+        val generation = videoPageGeneration
+        val query = videoPageQuery
+        _searchScreenState.update { it.copy(videosLoadingMore = true, videosPageError = null) }
+        videoPageJob = viewModelScope.launch {
+            try {
+                searchRepository.getRegularYouTubeVideoPage(query, token).collect { result ->
+                    if (generation != videoPageGeneration) return@collect
+                    when (result) {
+                        is Resource.Success -> {
+                            val page = result.data ?: return@collect
+                            unfilteredVideos = (unfilteredVideos + page.videos).distinctBy { it.videoId }
+                            _searchScreenState.update { current -> current.copy(
+                                searchVideosResult = filteredVideos(),
+                                videoContinuation = page.continuation?.takeUnless { it == token },
+                                videosPageError = null,
+                            ) }
+                        }
+                        is Resource.Error -> _searchScreenState.update { it.copy(videosPageError = result.message ?: "Unable to load more videos") }
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (generation == videoPageGeneration) _searchScreenState.update { it.copy(videosPageError = error.message ?: "Unable to load more videos") }
+            } finally {
+                if (generation == videoPageGeneration) _searchScreenState.update { it.copy(videosLoadingMore = false) }
+            }
+        }
+    }
+
     fun searchVideos(query: String) {
+        if (regularYouTubeVideos) { searchRegularVideos(query); return }
         _searchScreenUIState.value = SearchScreenUIState.Loading
         viewModelScope.launch {
             if (regularYouTubeVideos) dataStoreManager.setWatchVideoInsteadOfPlayingAudio(true)

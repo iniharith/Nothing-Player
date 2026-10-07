@@ -128,6 +128,9 @@ private const val TAG = "YouTubeScraper"
 
 class YouTube {
     suspend fun accountHomeVideos() = runCatching { ytMusic.accountHomeVideos() }
+    suspend fun regularVideosPage(query: String, continuation: String? = null) = runCatching {
+        if (query.isBlank()) ytMusic.accountHomeVideosPage(continuation) else ytMusic.searchRegularVideosPage(query, continuation)
+    }
 
     /** Video playback needs the full adaptive list, including high frame-rate and WebM formats. */
     fun videoPlayer(videoId: String) = runCatching {

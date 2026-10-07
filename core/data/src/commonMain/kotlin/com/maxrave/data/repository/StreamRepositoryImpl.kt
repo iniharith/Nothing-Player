@@ -91,6 +91,7 @@ internal class StreamRepositoryImpl(
         isDownloading: Boolean,
         isVideo: Boolean,
         muxed: Boolean,
+        videoQualityOverride: String?,
     ): Flow<String?> =
         flow {
             val itag =
@@ -106,7 +107,7 @@ internal class StreamRepositoryImpl(
                             if (isDownloading) {
                                 dataStoreManager.videoDownloadQuality.first()
                             } else {
-                                dataStoreManager.videoQuality.first()
+                                videoQualityOverride ?: dataStoreManager.videoQuality.first()
                             },
                         ),
                     )

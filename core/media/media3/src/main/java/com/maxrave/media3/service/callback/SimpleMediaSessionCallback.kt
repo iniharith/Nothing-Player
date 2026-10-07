@@ -235,7 +235,8 @@ internal class SimpleMediaSessionCallback(
                 songRepository.getSongById(mediaId).first()?.toTrack()
                     ?: savedTracks.firstOrNull { it.videoId == mediaId }
                     ?: return@withContext null
-            playbackResumptionQueue(currentTrack, savedTracks, position, dataStoreManager.playlistFromSaved.first())
+            val typedTrack = if (dataStoreManager.getString("recent_media_type").first() == com.maxrave.common.MERGING_DATA_TYPE.VIDEO) currentTrack.copy(videoType = "VIDEO") else currentTrack
+            playbackResumptionQueue(typedTrack, savedTracks.map { if (it.videoId == typedTrack.videoId) typedTrack else it }, position, dataStoreManager.playlistFromSaved.first())
         }
 
     private fun setRestoredQueue(queue: PlaybackResumptionQueue) {

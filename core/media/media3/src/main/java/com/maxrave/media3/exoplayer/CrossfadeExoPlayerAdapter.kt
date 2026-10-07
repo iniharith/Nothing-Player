@@ -40,6 +40,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import com.maxrave.domain.manager.*
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
@@ -114,8 +117,18 @@ internal class CrossfadeExoPlayerAdapter(
             }
         }
         coroutineScope.launch {
+            var initialized = false
             dataStoreManager.watchVideoInsteadOfPlayingAudio.collect { enabled ->
-                watchVideoEnabled = (enabled == DataStoreManager.TRUE)
+                val next = enabled == DataStoreManager.TRUE
+                val changed = initialized && watchVideoEnabled != next
+                initialized = true
+                watchVideoEnabled = next
+                if (changed && currentMediaItem?.isVideo() == true && !isCastActive) {
+                    val id = currentMediaItem?.mediaId ?: return@collect
+                    cancelPrecaching()
+                    clearAllPrecacheInternal()
+                    loadAndPlayTrackInternal(localCurrentMediaItemIndex, currentPosition, internalPlayWhenReady)
+                }
                 Logger.d(TAG, "Watch video enabled: $watchVideoEnabled")
             }
         }
@@ -124,7 +137,7 @@ internal class CrossfadeExoPlayerAdapter(
     init {
         coroutineScope.launch {
             var previous: String? = null
-            dataStoreManager.videoQuality.collect { quality ->
+            combine(dataStoreManager.videoQuality, dataStoreManager.getString(VIDEO_WIFI_QUALITY), dataStoreManager.getString(VIDEO_MOBILE_QUALITY), dataStoreManager.getString(VIDEO_QUALITY_OVERRIDE)) { quality, wifi, mobile, override -> listOf(quality, wifi, mobile, override).joinToString("|") }.debounce(200).collect { quality ->
                 val changed = previous != null && previous != quality
                 previous = quality
                 if (changed && watchVideoEnabled && currentMediaItem?.isVideo() == true && !isCastActive) {
@@ -135,7 +148,8 @@ internal class CrossfadeExoPlayerAdapter(
                         streamUrlCache.invalidate("${com.maxrave.common.MERGING_DATA_TYPE.VIDEO}$id")
                         streamRepository.invalidateFormat("${com.maxrave.common.MERGING_DATA_TYPE.VIDEO}$id")
                         if (index == localCurrentMediaItemIndex && currentMediaItem?.mediaId == id) {
-                            precachedPlayers.remove(id)?.let { cleanupPlayerInternal(it.player) }
+                            cancelPrecaching()
+                            clearAllPrecacheInternal()
                             loadAndPlayTrackInternal(index, position, internalPlayWhenReady)
                         }
                     } catch (cancelled: CancellationException) { throw cancelled }
@@ -864,7 +878,9 @@ internal class CrossfadeExoPlayerAdapter(
         loadAndPlayTrackInternal(localCurrentMediaItemIndex, cachedPosition, internalPlayWhenReady)
     }
 
-    override fun setMediaItem(mediaItem: GenericMediaItem) {
+    override fun setMediaItem(mediaItem: GenericMediaItem) = setMediaItem(mediaItem, 0)
+
+    override fun setMediaItem(mediaItem: GenericMediaItem, startPositionMs: Long) {
         coroutineScope.launch {
             // Cancel ongoing operations
             currentLoadJob?.cancel()
@@ -880,7 +896,7 @@ internal class CrossfadeExoPlayerAdapter(
             }
 
             notifyTimelineChanged("TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED")
-            loadAndPlayTrackInternal(0, 0, internalPlayWhenReady)
+            loadAndPlayTrackInternal(0, startPositionMs.coerceAtLeast(0), internalPlayWhenReady)
         }
     }
 

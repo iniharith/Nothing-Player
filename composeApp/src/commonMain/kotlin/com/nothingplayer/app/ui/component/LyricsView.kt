@@ -1,5 +1,7 @@
 package com.nothingplayer.app.ui.component
 
+import com.maxrave.domain.manager.songLyricsOffset
+
 import androidx.compose.animation.Animatable
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
@@ -250,7 +252,9 @@ fun LyricsView(
     val current by timeLine.collectAsStateWithLifecycle()
 
     val dataStoreManager = koinInject<DataStoreManager>()
-    val lyricsOffset by dataStoreManager.lyricsOffset.collectAsStateWithLifecycle(initialValue = 0)
+    val handler: com.maxrave.domain.mediaservice.handler.MediaPlayerHandler = koinInject()
+    val playing by handler.nowPlayingState.collectAsStateWithLifecycle()
+    val lyricsOffset by remember(playing.mediaItem.mediaId) { dataStoreManager.songLyricsOffset(playing.mediaItem.mediaId) }.collectAsStateWithLifecycle(initialValue = 0)
 
     val timedLineIndexes =
         remember(lyricsData.lyrics.lines) {
@@ -320,12 +324,12 @@ fun LyricsView(
                                 RichSyncLyricsLineItem(
                                     parsedLine = parsedLine,
                                     translatedWords = translatedWords,
-                                    currentTimeMs = current.current,
+                                    currentTimeMs = current.current - lyricsOffset,
                                     isCurrent = index == currentLineIndex,
                                     modifier =
                                         Modifier
                                             .clickable {
-                                                onLineClick(line.startTimeMs.toFloat() * 100 / timeLine.value.total)
+                                                if (timeLine.value.total > 0) onLineClick(((line.startTimeMs.toFloat() + lyricsOffset).coerceAtLeast(0f) * 100 / timeLine.value.total).coerceIn(0f, 100f))
                                             },
                                 )
                             } else {
@@ -338,7 +342,7 @@ fun LyricsView(
                                     modifier =
                                         Modifier
                                             .clickable {
-                                                onLineClick(line.startTimeMs.toFloat() * 100 / timeLine.value.total)
+                                                if (timeLine.value.total > 0) onLineClick(((line.startTimeMs.toFloat() + lyricsOffset).coerceAtLeast(0f) * 100 / timeLine.value.total).coerceIn(0f, 100f))
                                             },
                                 )
                             }
@@ -354,7 +358,7 @@ fun LyricsView(
                                 modifier =
                                     Modifier
                                         .clickable(enabled = lyricsData.lyrics.syncType == "LINE_SYNCED") {
-                                            onLineClick(line.startTimeMs.toFloat() * 100 / timeLine.value.total)
+                                            if (timeLine.value.total > 0) onLineClick(((line.startTimeMs.toFloat() + lyricsOffset).coerceAtLeast(0f) * 100 / timeLine.value.total).coerceIn(0f, 100f))
                                         },
                             )
                         }

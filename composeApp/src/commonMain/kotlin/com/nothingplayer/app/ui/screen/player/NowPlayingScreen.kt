@@ -127,6 +127,7 @@ import com.maxrave.domain.mediaservice.handler.RepeatState
 import com.maxrave.logger.Logger
 import com.nothingplayer.app.Platform
 import com.nothingplayer.app.expect.toggleMiniPlayer
+import com.maxrave.domain.manager.songLyricsOffset
 import com.nothingplayer.app.expect.ui.MediaPlayerView
 import com.nothingplayer.app.expect.ui.MediaPlayerViewWithSubtitle
 import com.nothingplayer.app.expect.ui.PlatformCastButton
@@ -313,6 +314,8 @@ fun NowPlayingScreenContent(
     // ⚠️ Use track.videoId (already prefix-stripped at MediaServiceHandlerImpl.kt:386).
     // Do NOT use mediaItem.mediaId — it carries the "Video" prefix for video items.
     val nowPlayingVideoId: String? = nowPlayingState?.track?.videoId
+    val featureSettings: com.maxrave.domain.manager.DataStoreManager = koinInject()
+    val songOffset by remember(nowPlayingVideoId) { featureSettings.songLyricsOffset(nowPlayingVideoId) }.collectAsStateWithLifecycle(initialValue = 0)
     val currentOrderIndex by remember(artworkQueue, nowPlayingVideoId) {
         derivedStateOf { deriveOrderIndex(artworkQueue, nowPlayingVideoId) }
     }
@@ -639,7 +642,7 @@ fun NowPlayingScreenContent(
     }
 
     // Canvas subtitle sync
-    LaunchedEffect(timelineState, screenDataState.lyricsData?.lyrics) {
+    LaunchedEffect(timelineState, screenDataState.lyricsData?.lyrics, songOffset) {
         val lyrics = screenDataState.lyricsData?.lyrics
         if (lyrics == null || lyrics.syncType == "UNSYNCED" || lyrics.syncType == null) {
             currentLyricLineIndex = -1
@@ -660,12 +663,12 @@ fun NowPlayingScreenContent(
                     } else {
                         startTimeMs + 60000
                     }
-                if (timelineState.current in startTimeMs..endTimeMs) {
+                if (timelineState.current - songOffset in startTimeMs until endTimeMs) {
                     currentLyricLineIndex = i
                 }
             }
             if (lines.isNotEmpty() &&
-                timelineState.current in 0..(lines.getOrNull(0)?.startTimeMs?.toLongOrNull() ?: 0L)
+                timelineState.current - songOffset < (lines.getOrNull(0)?.startTimeMs?.toLongOrNull() ?: 0L)
             ) {
                 currentLyricLineIndex = -1
             }
@@ -1634,6 +1637,7 @@ fun NowPlayingScreenContent(
                                             sharedViewModel.onUIEvent(UIEvent.ToggleLike)
                                         }
                                     }
+                                    com.nothingplayer.app.ui.component.PlayerFeatureControls(nowPlayingVideoId, screenDataState.isVideo)
                                     if (getPlatform() == Platform.Android) {
                                         // Real Slider
                                         Box(

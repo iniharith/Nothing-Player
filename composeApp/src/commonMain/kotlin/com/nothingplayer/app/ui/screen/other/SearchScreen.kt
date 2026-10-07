@@ -164,6 +164,14 @@ fun SearchScreen(
     sharedViewModel: SharedViewModel = koinInject(),
     navController: NavController,
 ) {
+    val videoHistory by searchViewModel.videoHistory.collectAsStateWithLifecycle()
+    var showVideoHistory by rememberSaveable { mutableStateOf(false) }
+    fun resumeHistory(entry: com.maxrave.domain.manager.VideoWatchEntry) {
+        val tracks = videoHistory.map { it.track }
+        searchViewModel.setQueueData(QueueData.Data(listTracks = ArrayList(tracks), firstPlayedTrack = entry.track, playlistId = null, playlistName = "Watch history", playlistType = PlaylistType.PLAYLIST, continuation = null))
+        searchViewModel.loadMediaItem(entry.track, Config.VIDEO_CLICK, tracks.indexOfFirst { it.videoId == entry.track.videoId })
+        onVideoSelected()
+    }
     val uriHandler = LocalUriHandler.current
     val focusManager = LocalFocusManager.current
     val searchScreenState by searchViewModel.searchScreenState.collectAsStateWithLifecycle()
@@ -196,6 +204,18 @@ fun SearchScreen(
     val historyState = rememberLazyListState()
     val moodGridState = rememberLazyGridState()
     val resultsState = rememberLazyListState()
+    val nearVideoListEnd by remember {
+        derivedStateOf {
+            val layout = resultsState.layoutInfo
+            val lastVisible = layout.visibleItemsInfo.lastOrNull()?.index ?: -1
+            layout.totalItemsCount > 0 && lastVisible >= layout.totalItemsCount - 4
+        }
+    }
+    LaunchedEffect(videosOnly, showVideoHistory, searchScreenState.searchVideosResult.size, nearVideoListEnd, searchScreenState.videoContinuation, searchScreenState.videosLoadingMore, searchScreenState.videosPageError, uiState) {
+        if (videosOnly && !showVideoHistory && (nearVideoListEnd || searchScreenState.searchVideosResult.isEmpty()) && !searchScreenState.videosLoadingMore && searchScreenState.videosPageError == null) {
+            searchViewModel.loadMoreVideos()
+        }
+    }
     var searchBarHeightPx by remember { mutableIntStateOf(0) }
     val searchBarHeight = with(LocalDensity.current) { searchBarHeightPx.toDp() }
     val isContentAtTop by remember {
@@ -256,6 +276,7 @@ fun SearchScreen(
     }
 
     LaunchedEffect(searchText) {
+        if (searchText.isNotBlank()) showVideoHistory = false
         if (isFocused) {
             isSearchSubmitted = false
             isExpanded = true
@@ -658,7 +679,9 @@ fun SearchScreen(
                                 )
                             },
                         ) {
-                            Crossfade(targetState = uiState) { uiState ->
+                            if (videosOnly && showVideoHistory) {
+                                VideoWatchHistoryList(videoHistory, searchBarHeight, ::resumeHistory)
+                            } else Crossfade(targetState = uiState) { uiState ->
                                 when (uiState) {
                                     is SearchScreenUIState.Loading -> {
                                         // Loading state — same top inset as the results list, or
@@ -704,6 +727,18 @@ fun SearchScreen(
                                                             ),
                                                         state = resultsState,
                                                     ) {
+                                                        if (videosOnly && searchText.isBlank()) {
+                                                            val continuing = videoHistory.filter { it.resumePositionMs > 0 }.take(3)
+                                                            if (continuing.isNotEmpty()) item {
+                                                                Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                                                                    Text("Continue watching", style = typo().titleMedium)
+                                                                    continuing.forEach { entry ->
+                                                                        TextButton(onClick = { resumeHistory(entry) }) { Text(entry.track.title, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                                                                    }
+                                                                    TextButton(onClick = { showVideoHistory = true }) { Text("View watch history") }
+                                                                }
+                                                            }
+                                                        }
                                                         items(currentResults) { result ->
                                                             when (result) {
                                                                 is SongsResult -> {
@@ -770,10 +805,10 @@ fun SearchScreen(
                                                                             if (videosOnly) onVideoSelected()
                                                                         },
                                                                         onAddToQueue = {
-                                                                            sharedViewModel.addListToQueue(
-                                                                                arrayListOf(result.toTrack()),
-                                                                            )
+                                                                            sharedViewModel.addListToQueue(arrayListOf(result.toTrack()))
                                                                         },
+                                                                        onHideVideo = if (videosOnly) ({ searchViewModel.hideVideo(result.toTrack()) }) else null,
+                                                                        onHideChannel = if (videosOnly) ({ searchViewModel.hideChannel(result.toTrack()) }) else null,
                                                                     )
                                                                 }
 
@@ -825,6 +860,19 @@ fun SearchScreen(
                                                                 }
                                                             }
                                                         }
+                                                        if (videosOnly && (searchScreenState.videosLoadingMore || searchScreenState.videosPageError != null)) {
+                                                            item {
+                                                                Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                                                                    if (searchScreenState.videosLoadingMore) {
+                                                                        androidx.compose.material3.CircularProgressIndicator()
+                                                                    } else {
+                                                                        Button(onClick = { searchViewModel.loadMoreVideos() }) {
+                                                                            Text(stringResource(Res.string.retry))
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
                                                         // Space at bottom to account for bottom navigation and mini player
                                                         item { Spacer(modifier = Modifier.height(150.dp)) }
                                                     }
@@ -861,9 +909,8 @@ fun SearchScreen(
                                                 )
                                                 Spacer(modifier = Modifier.height(10.dp))
                                                 Button(onClick = {
-                                                    if (searchText.isNotEmpty()) {
-                                                        searchViewModel.searchAll(searchText)
-                                                    }
+                                                    if (videosOnly) searchViewModel.searchVideos(searchText)
+                                                    else if (searchText.isNotEmpty()) searchViewModel.searchAll(searchText)
                                                 }) {
                                                     Text(text = stringResource(Res.string.retry))
                                                 }
@@ -1015,17 +1062,19 @@ fun SearchScreen(
                                 .padding(horizontal = 12.dp),
                     ) {
                         (if (videosOnly) listOf(SearchType.VIDEOS) else SearchType.entries).forEach { id ->
-                            val isSelected = id == searchScreenState.searchType
+                            val isSelected = id == searchScreenState.searchType && !showVideoHistory
                             Spacer(modifier = Modifier.width(4.dp))
                             Chip(
                                 isAnimated = uiState is SearchScreenUIState.Loading,
                                 isSelected = isSelected,
                                 text = stringResource(id.toStringRes()),
                             ) {
+                                showVideoHistory = false
                                 searchViewModel.setSearchType(id)
                             }
                             Spacer(modifier = Modifier.width(4.dp))
                         }
+                        if (videosOnly) Chip(isSelected = showVideoHistory, text = "Watch history", isAnimated = false) { showVideoHistory = true }
                     }
                 }
             }
@@ -1180,7 +1229,10 @@ private fun VideoFeedItems(
     onMoreClickListener: () -> Unit,
     onClickListener: () -> Unit,
     onAddToQueue: () -> Unit,
+    onHideVideo: (() -> Unit)? = null,
+    onHideChannel: (() -> Unit)? = null,
 ) {
+    var menu by remember { mutableStateOf(false) }
     Column(modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
         Box(Modifier.fillMaxWidth().aspectRatio(16f / 9).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainer).clickable(onClick = onClickListener)) {
             AsyncImage(model = track.thumbnails?.lastOrNull()?.url, contentDescription = track.title,
@@ -1196,8 +1248,34 @@ private fun VideoFeedItems(
                 Text(track.artists?.joinToString(" • ") { it.name }.orEmpty(), style = typo().bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            TextButton(onClick = onMoreClickListener) { Text("•••") }
+            Box {
+                TextButton(onClick = { if (onHideVideo != null) menu = true else onMoreClickListener() }) { Text("•••") }
+                androidx.compose.material3.DropdownMenu(menu, { menu = false }) {
+                    androidx.compose.material3.DropdownMenuItem(text = { Text("More options") }, onClick = { menu = false; onMoreClickListener() })
+                    androidx.compose.material3.DropdownMenuItem(text = { Text("Not interested") }, onClick = { menu = false; onHideVideo?.invoke() })
+                    if (!track.artists.isNullOrEmpty()) androidx.compose.material3.DropdownMenuItem(text = { Text("Hide channel") }, onClick = { menu = false; onHideChannel?.invoke() })
+                }
+            }
         }
         TextButton(onClick = onAddToQueue) { Text("Add to queue", style = typo().labelSmall) }
+    }
+}
+
+@Composable
+private fun VideoWatchHistoryList(entries: List<com.maxrave.domain.manager.VideoWatchEntry>, topInset: androidx.compose.ui.unit.Dp, onResume: (com.maxrave.domain.manager.VideoWatchEntry) -> Unit) {
+    LazyColumn(contentPadding = PaddingValues(top = topInset, bottom = 160.dp)) {
+        item { Text("Continue watching", style = typo().titleLarge, modifier = Modifier.padding(16.dp)) }
+        val continuing = entries.filter { it.resumePositionMs > 0 }
+        if (continuing.isEmpty()) item { Text("No unfinished videos", Modifier.padding(16.dp)) }
+        items(continuing, key = { "continue_${it.track.videoId}" }) { entry ->
+            VideoFeedItems(entry.track, false, Modifier, {}, { onResume(entry) }, {})
+            Text("Resume at ${entry.resumePositionMs / 60000}:${((entry.resumePositionMs / 1000) % 60).toString().padStart(2, '0')}", Modifier.padding(horizontal = 16.dp))
+            if (entry.durationMs > 0) androidx.compose.material3.LinearProgressIndicator(progress = { (entry.positionMs.toFloat() / entry.durationMs).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().padding(16.dp))
+        }
+        item { Text("Watch history", style = typo().titleLarge, modifier = Modifier.padding(16.dp)) }
+        if (entries.isEmpty()) item { Text("Videos you play will appear here.", Modifier.padding(16.dp)) }
+        items(entries, key = { "history_${it.track.videoId}" }) { entry ->
+            VideoFeedItems(entry.track, false, Modifier, {}, { onResume(entry) }, {})
+        }
     }
 }

@@ -44,3 +44,19 @@ internal fun parseAccountHomeVideos(root: JsonElement): List<RegularVideo> {
     visit(root)
     return result.values.toList()
 }
+
+internal fun parseAccountHomeVideoPage(root: JsonElement): com.maxrave.kotlinytmusicscraper.extractor.RegularVideoPage {
+    fun token(node: JsonElement): String? = when (node) {
+        is JsonObject -> {
+            // Only feed continuation items, not unrelated menu or shelf tokens.
+            val item = node["continuationItemRenderer"] as? JsonObject
+            val endpoint = item?.get("continuationEndpoint") as? JsonObject
+            val command = endpoint?.get("continuationCommand") as? JsonObject
+            (command?.get("token") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+                ?: node.values.firstNotNullOfOrNull { token(it) }
+        }
+        is JsonArray -> node.firstNotNullOfOrNull { token(it) }
+        else -> null
+    }
+    return com.maxrave.kotlinytmusicscraper.extractor.RegularVideoPage(parseAccountHomeVideos(root), token(root))
+}

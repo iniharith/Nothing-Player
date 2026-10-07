@@ -794,6 +794,7 @@ fun SettingScreen(
                         )
                     },
                 )
+                com.nothingplayer.app.ui.component.VideoPreferenceSettings()
                 SettingItem(
                     title = stringResource(Res.string.video_download_quality),
                     subtitle = videoDownloadQuality ?: "",

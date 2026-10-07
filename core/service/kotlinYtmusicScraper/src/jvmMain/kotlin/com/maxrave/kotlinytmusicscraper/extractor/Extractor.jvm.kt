@@ -54,14 +54,32 @@ actual class Extractor {
         )
     }
 
-    actual fun searchVideos(query: String): List<RegularVideo> {
+    actual fun searchVideos(query: String): List<RegularVideo> = searchVideosPage(query).videos
+
+    actual fun searchVideosPage(query: String, continuation: String?): RegularVideoPage {
         val extractor = BraveServiceList.YouTube.getSearchExtractor(query)
-        extractor.fetchPage()
-        val info = org.schabi.newpipe.extractor.search.SearchInfo.getInfo(extractor)
-        return info.relatedItems.filterIsInstance<org.schabi.newpipe.extractor.stream.StreamInfoItem>().mapNotNull { item ->
+        val items: List<org.schabi.newpipe.extractor.InfoItem>
+        val next: org.schabi.newpipe.extractor.Page?
+        if (continuation == null) {
+            extractor.fetchPage()
+            val info = org.schabi.newpipe.extractor.search.SearchInfo.getInfo(extractor)
+            items = info.relatedItems
+            next = info.nextPage
+        } else {
+            val saved = kotlinx.serialization.json.Json.decodeFromString<VideoSearchContinuation>(continuation)
+            val page = org.schabi.newpipe.extractor.Page(saved.url, saved.id, saved.ids, saved.cookies, saved.body)
+            val info = org.schabi.newpipe.extractor.search.SearchInfo.getMoreItems(BraveServiceList.YouTube, extractor.linkHandler, page)
+            items = info.items
+            next = info.nextPage
+        }
+        val videos = items.filterIsInstance<org.schabi.newpipe.extractor.stream.StreamInfoItem>().mapNotNull { item ->
             val id = item.url.substringAfter("v=", "").substringBefore("&").takeIf { it.isNotBlank() } ?: return@mapNotNull null
             RegularVideo(id, item.name, item.uploaderName.orEmpty(), item.duration.coerceAtLeast(0).coerceAtMost(Int.MAX_VALUE.toLong()).toInt(), item.thumbnails.firstOrNull()?.url.orEmpty())
         }
+        val token = next?.takeIf { org.schabi.newpipe.extractor.Page.isValid(it) }?.let {
+            kotlinx.serialization.json.Json.encodeToString(VideoSearchContinuation.serializer(), VideoSearchContinuation(it.url, it.id, it.ids, it.cookies, it.body))
+        }
+        return RegularVideoPage(videos, token)
     }
 
     actual fun init() {

@@ -264,17 +264,20 @@ class Ytmusic {
 
     fun regularVideoPlayer(videoId: String) = extractor.regularVideoPlayer(videoId)
 
-    suspend fun accountHomeVideos(): List<com.maxrave.kotlinytmusicscraper.extractor.RegularVideo> {
+    suspend fun accountHomeVideos(): List<com.maxrave.kotlinytmusicscraper.extractor.RegularVideo> = accountHomeVideosPage().videos
+
+    suspend fun accountHomeVideosPage(continuation: String? = null): com.maxrave.kotlinytmusicscraper.extractor.RegularVideoPage {
         check(!cookie.isNullOrBlank() && ("SAPISID" in cookieMap || "__Secure-3PAPISID" in cookieMap)) {
             "Sign in to YouTube in Settings to load your personal recommendations"
         }
-        val response = browse(WEB, browseId = "FEwhat_to_watch", setLogin = true)
+        val response = browse(WEB, browseId = if (continuation == null) "FEwhat_to_watch" else null, continuation = continuation, setLogin = true)
         check(response.status.value in 200..299) { "YouTube account home unavailable. Please sign in again" }
-        val videos = parseAccountHomeVideos(Json.parseToJsonElement(response.bodyAsText()))
-        check(videos.isNotEmpty()) { "YouTube returned no account recommendations. Please refresh or sign in again" }
-        return videos
+        val page = parseAccountHomeVideoPage(Json.parseToJsonElement(response.bodyAsText()))
+        check(continuation != null || page.videos.isNotEmpty()) { "YouTube returned no account recommendations. Please refresh or sign in again" }
+        return page
     }
     fun searchRegularVideos(query: String) = extractor.searchVideos(query)
+    fun searchRegularVideosPage(query: String, continuation: String? = null) = extractor.searchVideosPage(query, continuation)
 
     fun getNewPipePlayer(videoId: String): List<Pair<Int, String>> = extractor.newPipePlayer(videoId)
 

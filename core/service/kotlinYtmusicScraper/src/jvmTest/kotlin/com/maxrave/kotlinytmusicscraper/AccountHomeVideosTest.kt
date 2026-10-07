@@ -12,4 +12,17 @@ class AccountHomeVideosTest {
         assertEquals("Personal home", videos[1].title)
         assertEquals("https://example.test/new", videos[1].thumbnail)
     }
+    @Test fun preservesFeedContinuationAndParsesAppendedCards() {
+        val json = """{"onResponseReceivedActions":[{"appendContinuationItemsAction":{"continuationItems":[{"videoRenderer":{"videoId":"abcdefghijk","title":{"simpleText":"Next recommendation"}}},{"continuationItemRenderer":{"continuationEndpoint":{"continuationCommand":{"token":"next-account-page"}}}}]}}]}"""
+        val page = parseAccountHomeVideoPage(Json.parseToJsonElement(json))
+        assertEquals(listOf("abcdefghijk"), page.videos.map { it.id })
+        assertEquals("next-account-page", page.continuation)
+    }
+
+    @Test fun ignoresUnrelatedTokensAndAllowsEndOfFeed() {
+        val json = """{"menu":{"continuationCommand":{"token":"not-a-feed-page"}},"contents":[]}"""
+        val page = parseAccountHomeVideoPage(Json.parseToJsonElement(json))
+        assertEquals(emptyList(), page.videos)
+        assertEquals(null, page.continuation)
+    }
 }

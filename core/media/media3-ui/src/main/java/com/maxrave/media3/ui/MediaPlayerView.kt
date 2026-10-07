@@ -67,6 +67,7 @@ import com.maxrave.common.Config
 import com.maxrave.domain.data.model.metadata.Lyrics
 import com.maxrave.domain.data.model.streams.TimeLine
 import com.maxrave.domain.data.model.ui.ScreenSizeInfo
+import com.maxrave.domain.manager.songLyricsOffset
 import com.maxrave.domain.manager.DataStoreManager
 import com.maxrave.logger.Logger
 import com.maxrave.media3.ui.extension.KeepScreenOn
@@ -238,7 +239,9 @@ fun MediaPlayerViewWithSubtitle(
     val player: Player = koinInject(named(playerName))
 
     val dataStoreManager = koinInject<DataStoreManager>()
-    val lyricsOffset by dataStoreManager.lyricsOffset.collectAsState(initial = 0)
+    val handler: com.maxrave.domain.mediaservice.handler.MediaPlayerHandler = koinInject()
+    val playing by handler.nowPlayingState.collectAsState()
+    val lyricsOffset by remember(playing.mediaItem.mediaId) { dataStoreManager.songLyricsOffset(playing.mediaItem.mediaId) }.collectAsState(initial = 0)
 
     var shouldEnterPipMode by rememberSaveable {
         mutableStateOf(false)

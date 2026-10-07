@@ -1065,6 +1065,9 @@ class SettingsViewModel(
         viewModelScope.launch {
             if (VIDEO_QUALITY.items.contains(item)) {
                 dataStoreManager.setVideoQuality(item)
+                dataStoreManager.putString(com.maxrave.domain.manager.VIDEO_WIFI_QUALITY, item)
+                dataStoreManager.putString(com.maxrave.domain.manager.VIDEO_MOBILE_QUALITY, item)
+                dataStoreManager.putString(com.maxrave.domain.manager.VIDEO_QUALITY_OVERRIDE, "")
             }
             getVideoQuality()
         }

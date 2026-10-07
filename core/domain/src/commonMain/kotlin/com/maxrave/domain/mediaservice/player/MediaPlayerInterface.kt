@@ -43,6 +43,11 @@ interface MediaPlayerInterface {
     // Media item management
     fun setMediaItem(mediaItem: GenericMediaItem)
 
+    fun setMediaItem(mediaItem: GenericMediaItem, startPositionMs: Long) {
+        setMediaItem(mediaItem)
+        seekTo(startPositionMs)
+    }
+
     fun addMediaItem(mediaItem: GenericMediaItem)
 
     fun addMediaItem(

@@ -14,6 +14,7 @@ import androidx.compose.ui.unit.dp
 import androidx.media3.common.Player
 import com.maxrave.common.Config
 import com.maxrave.domain.data.model.metadata.Lyrics
+import com.maxrave.domain.manager.*
 import com.maxrave.domain.manager.DataStoreManager
 import com.maxrave.domain.repository.LyricsCanvasRepository
 import kotlinx.coroutines.CancellationException
@@ -31,12 +32,17 @@ fun VideoPlaybackSettings(modifier: Modifier = Modifier, alignRight: Boolean = t
     val settings: DataStoreManager = koinInject()
     val repository: LyricsCanvasRepository = koinInject()
     val scope = rememberCoroutineScope()
-    val quality by settings.videoQuality.collectAsState(initial = "720p")
+    val qualityOverride by settings.getString(VIDEO_QUALITY_OVERRIDE).collectAsState(initial = null)
+    val videoEnabled by settings.watchVideoInsteadOfPlayingAudio.collectAsState(initial = DataStoreManager.TRUE)
     var mediaId by remember { mutableStateOf(player.currentMediaItem?.mediaId) }
     var actualHeight by remember { mutableIntStateOf(player.videoSize.height) }
+    val quality = qualityOverride?.takeIf { it.substringBefore(':') == mediaId.orEmpty().removePrefix("Video") }?.substringAfter(':') ?: "Auto"
     var qualityMenu by remember { mutableStateOf(false) }
     var captionsMenu by remember { mutableStateOf(false) }
-    var language by rememberSaveable { mutableStateOf("off") }
+    val languagePreference by settings.getString(CAPTION_LANGUAGE).collectAsState(initial = null)
+    val captionSizePreference by settings.getString(CAPTION_SIZE).collectAsState(initial = null)
+    val language = languagePreference ?: "off"
+    val captionScale = captionSizePreference?.toFloatOrNull()?.coerceIn(0.8f, 1.6f) ?: 1f
     var captions by remember { mutableStateOf<Lyrics?>(null) }
     var status by remember { mutableStateOf("") }
     var line by remember { mutableStateOf("") }
@@ -74,14 +80,17 @@ fun VideoPlaybackSettings(modifier: Modifier = Modifier, alignRight: Boolean = t
     }
     Box(modifier) {
         Row(Modifier.align(if (alignRight) Alignment.TopEnd else Alignment.TopStart).padding(4.dp).background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(8.dp))) {
+            TextButton(onClick = { scope.launch { settings.setWatchVideoInsteadOfPlayingAudio(videoEnabled != DataStoreManager.TRUE) } }) {
+                Text(if (videoEnabled == DataStoreManager.TRUE) "Audio only" else "Watch video", color = Color.White)
+            }
             Box {
                 TextButton(onClick = { qualityMenu = true }) { Text(if (actualHeight > 0) "${actualHeight}p ⚙" else "$quality ⚙", color = Color.White) }
                 DropdownMenu(expanded = qualityMenu, onDismissRequest = { qualityMenu = false }) {
                     Text("Video quality", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.titleSmall)
-                    listOf("1080p", "720p", "360p").forEach { resolution ->
+                    listOf("Auto", "1080p", "720p", "360p").forEach { resolution ->
                         DropdownMenuItem(text = { Text(if (resolution == quality) "$resolution ✓" else resolution) }, onClick = {
                             qualityMenu = false
-                            scope.launch { settings.setVideoQuality(resolution) }
+                            scope.launch { settings.putString(VIDEO_QUALITY_OVERRIDE, if (resolution == "Auto") "" else "${mediaId.orEmpty().removePrefix("Video")}:$resolution") }
                         })
                     }
                     Text("Uses the closest available stream", modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
@@ -91,14 +100,19 @@ fun VideoPlaybackSettings(modifier: Modifier = Modifier, alignRight: Boolean = t
                 TextButton(onClick = { captionsMenu = true }) { Text(if (language == "off") "CC" else "CC ✓", color = Color.White) }
                 DropdownMenu(expanded = captionsMenu, onDismissRequest = { captionsMenu = false }) {
                     listOf("off" to "Off", "original" to "Original", "en" to "English", "ms" to "Malay", "id" to "Indonesian").forEach { (code, label) ->
-                        DropdownMenuItem(text = { Text(if (language == code) "$label ✓" else label) }, onClick = { captionsMenu = false; language = code })
+                        DropdownMenuItem(text = { Text(if (language == code) "$label ✓" else label) }, onClick = { captionsMenu = false; scope.launch { settings.putString(CAPTION_LANGUAGE, code) } })
+                    }
+                    HorizontalDivider()
+                    Text("Caption size", Modifier.padding(12.dp))
+                    listOf("0.8" to "Small", "1.0" to "Medium", "1.4" to "Large").forEach { (value, label) ->
+                        DropdownMenuItem(text = { Text(label) }, onClick = { captionsMenu = false; scope.launch { settings.putString(CAPTION_SIZE, value) } })
                     }
                 }
             }
         }
         val text = line.ifBlank { status }
         if (language != "off" && text.isNotBlank()) Text(text, color = Color.White, textAlign = TextAlign.Center,
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodyMedium.copy(fontSize = MaterialTheme.typography.bodyMedium.fontSize * captionScale),
             modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp).background(Color.Black.copy(alpha = 0.8f), RoundedCornerShape(4.dp)).padding(6.dp))
     }
 }

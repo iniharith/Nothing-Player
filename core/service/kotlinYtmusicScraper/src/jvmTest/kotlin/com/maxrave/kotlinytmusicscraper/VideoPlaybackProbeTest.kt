@@ -69,4 +69,19 @@ class VideoPlaybackProbeTest {
                 connection.inputStream.use { assertTrue(it.read() >= 0) }
             } finally { connection.disconnect() }
         }
-    }}
+    }
+    @Test fun probeVideoSearchPagination() = runBlocking {
+        if (System.getenv("NOTHING_VIDEO_PROBE") != "1") return@runBlocking
+        withTimeout(90_000) {
+            val youtube = YouTube()
+            val first = youtube.regularVideosPage("Big Buck Bunny Blender").getOrThrow()
+            assertTrue(first.videos.isNotEmpty())
+            val token = first.continuation
+            assertTrue(!token.isNullOrBlank(), "Search must preserve YouTube's next page")
+            val second = youtube.regularVideosPage("Big Buck Bunny Blender", token).getOrThrow()
+            val combined = (first.videos + second.videos).distinctBy { it.id }
+            println("PAGINATION_PROBE first=${first.videos.size} second=${second.videos.size} combined=${combined.size}")
+            assertTrue(combined.size > first.videos.size, "Next page must add new videos")
+        }
+    }
+}

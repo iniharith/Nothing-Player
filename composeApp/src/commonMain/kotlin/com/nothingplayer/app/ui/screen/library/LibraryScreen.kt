@@ -220,6 +220,7 @@ fun LibraryScreen(
                         ),
                     state = state,
                 ) {
+                    item { com.nothingplayer.app.ui.component.SavedQueueResumeCard() }
                     item {
                         LibraryTilingBox(navController)
                     }

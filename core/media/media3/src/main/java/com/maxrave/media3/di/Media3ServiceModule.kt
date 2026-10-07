@@ -333,6 +333,7 @@ private fun provideResolvingDataSourceFactory(
                         id,
                         isDownloading = false,
                         isVideo = true,
+                        videoQualityOverride = cacheKey.substringAfter(":quality=", "").substringBefore(":").takeIf { it.isNotBlank() },
                     ).firstOrNull()
                     ?.let {
                         Logger.w("Stream", "Video")
@@ -452,6 +453,7 @@ private fun provideMergingMediaSource(
             streamUrlCache,
         ),
         dataStoreManager,
+        context,
     )
 
 @UnstableApi

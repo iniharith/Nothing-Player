@@ -7,6 +7,7 @@ import androidx.media3.common.FlagSet
 import androidx.media3.common.util.UnstableApi
 import com.maxrave.domain.data.model.metadata.Line
 import com.maxrave.domain.data.model.metadata.Lyrics
+import com.maxrave.domain.manager.songLyricsOffset
 import com.maxrave.domain.manager.DataStoreManager
 import com.maxrave.domain.repository.LyricsCanvasRepository
 import com.maxrave.media3.exoplayer.forwardingListener
@@ -68,7 +69,7 @@ internal class CarLyricsPlayer(
                     throw cancelled
                 } catch (_: Exception) { null }
                 if (lyrics?.syncType != "LINE_SYNCED") return@collectLatest
-                combine(settings.lyricsOffset, ticker()) { offset, _ -> offset }.collect { offset ->
+                combine(settings.songLyricsOffset(id), ticker()) { offset, _ -> offset }.collect { offset ->
                     if (base.currentMediaItem?.mediaId != id) return@collect
                     val next = lyricWindow(lyrics.lines.orEmpty(), base.currentPosition - offset)
                     if (display != next || lyricId != id) {
