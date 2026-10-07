@@ -394,9 +394,10 @@ internal class LyricsCanvasRepositoryImpl(
                     .replace(Regex("([()])"), "")
                     .replace(".", " ")
             nothingPlayerLyrics
-                .searchLrclibLyrics(qtrack, qartist, duration)
+                .searchLrclibLyrics(qtrack, qartist, duration?.takeIf { it > 0 })
                 .onSuccess {
-                    it?.let { emit(Resource.Success<Lyrics>(it.toLyrics())) }
+                    if (it == null) emit(Resource.Error<Lyrics>("No lyrics found"))
+                    else emit(Resource.Success<Lyrics>(it.toLyrics()))
                 }.onFailure {
                     it.printStackTrace()
                     emit(Resource.Error<Lyrics>("Not found"))

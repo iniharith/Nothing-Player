@@ -2109,7 +2109,12 @@ internal class MediaServiceHandlerImpl(
         }
     }
 
-    override fun getPlayerDuration(): Long = player.duration
+    override fun getPlayerDuration(): Long {
+        if (player.duration > 0) return player.duration
+        val song = nowPlayingState.value.songEntity
+        return song?.takeIf { it.videoId == player.currentMediaItem?.mediaId }
+            ?.durationSeconds?.takeIf { it > 0 }?.toLong()?.times(1000) ?: 0L
+    }
 
     override fun getProgress(): Long = player.currentPosition
 
@@ -2459,7 +2464,7 @@ internal class MediaServiceHandlerImpl(
 
             PlayerConstants.STATE_READY -> {
                 Logger.d(TAG, "onPlaybackStateChanged: Ready")
-                _simpleMediaState.value = SimpleMediaState.Ready(player.duration)
+                _simpleMediaState.value = SimpleMediaState.Ready(getPlayerDuration())
             }
 
             else -> {
@@ -2697,7 +2702,8 @@ internal class MediaServiceHandlerImpl(
 
     override fun onIsLoadingChanged(isLoading: Boolean) {
         _simpleMediaState.value =
-            SimpleMediaState.Loading(player.bufferedPercentage, player.duration)
+            if (isLoading) SimpleMediaState.Loading(player.bufferedPercentage, getPlayerDuration())
+            else SimpleMediaState.Ready(getPlayerDuration())
         if (isLoading) {
             startBufferedUpdate()
         } else {

@@ -40,7 +40,9 @@ internal class MergingMediaSourceFactory(
                 mediaItem
                     .buildUpon()
                     .setMediaId("${MERGING_DATA_TYPE.VIDEO}${mediaItem.mediaId}")
-                    .setCustomCacheKey("${MERGING_DATA_TYPE.VIDEO}${mediaItem.mediaId}:quality=${runBlocking(Dispatchers.IO) { dataStoreManager.videoQuality.first() }}")
+                    // Earlier builds cached 360p bytes under a requested 1080p key.
+                    // Keep those files separate from resolution-based stream selection.
+                    .setCustomCacheKey("${MERGING_DATA_TYPE.VIDEO}${mediaItem.mediaId}:quality=${runBlocking(Dispatchers.IO) { dataStoreManager.videoQuality.first() }}:streams=2")
                     .build()
             return MergingMediaSource(
                 defaultMediaSourceFactory.createMediaSource(videoItem),

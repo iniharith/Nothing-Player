@@ -95,7 +95,9 @@ internal class SimpleMediaService : MediaLibraryService(), KoinComponent {
             ).apply { setSmallIcon(R.drawable.mono) },
         )
         getSystemService<NotificationManager>()?.cancel(2026)
-        carLyricsPlayer = CarLyricsPlayer(player, lyricsSettings, lyricsRepository)
+        carLyricsPlayer = CarLyricsPlayer(player, lyricsSettings, lyricsRepository) {
+            simpleMediaServiceHandler.player.playWhenReady = it
+        }
         mediaSession =
             MediaLibrarySession.Builder(this, carLyricsPlayer, simpleMediaSessionCallback)
                 .setId(javaClass.name)

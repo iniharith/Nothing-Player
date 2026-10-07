@@ -1160,7 +1160,7 @@ fun NowPlayingScreenContent(
                                                                     onDismiss()
                                                                     navController.navigate(FullscreenDestination)
                                                                 },
-                                                                Modifier.align(Alignment.TopEnd),
+                                                                Modifier.align(Alignment.BottomStart),
                                                             ) {
                                                                 Icon(
                                                                     imageVector = SimpIcons.Fullscreen,
@@ -2609,7 +2609,7 @@ fun NowPlayingScreenContent(
                                 .align(Alignment.BottomCenter),
                     ) {
                         LinearProgressIndicator(
-                            progress = { timelineState.current.toFloat() / timelineState.total },
+                            progress = { if (timelineState.total > 0) (timelineState.current.toFloat() / timelineState.total).coerceIn(0f, 1f) else 0f },
                             modifier =
                                 Modifier
                                     .fillMaxWidth()

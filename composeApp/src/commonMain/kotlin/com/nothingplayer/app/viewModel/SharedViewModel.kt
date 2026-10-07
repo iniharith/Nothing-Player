@@ -301,6 +301,11 @@ class SharedViewModel(
                     canvasJob?.cancel()
                     _nowPlayingState.value = state
                     state.songEntity?.let { track ->
+                        _timeline.update { timeline ->
+                            timeline.copy(current = mediaPlayerHandler.getProgress().coerceAtLeast(0L),
+                                total = track.durationSeconds.coerceAtLeast(0).toLong() * 1000,
+                                bufferedPercent = 0, loading = true)
+                        }
                         _nowPlayingScreenData.value =
                             NowPlayingScreenData(
                                 nowPlayingTitle = track.title,
@@ -338,6 +343,9 @@ class SharedViewModel(
                                 isExplicit = song.isExplicit,
                             )
                         }
+                        // Fetch even before the decoder publishes a duration. Saved lyrics and
+                        // providers without duration matching must work for short/unknown tracks.
+                        getLyricsFromFormat(state.mediaItem.isVideo(), song, song.durationSeconds.coerceAtLeast(0))
                     }
                 }
         }
@@ -370,13 +378,15 @@ class SharedViewModel(
                             }
 
                             is SimpleMediaState.Progress -> {
-                                if (mediaState.progress >= 0L && mediaState.progress != _timeline.value.current) {
+                                val knownDuration = mediaPlayerHandler.getPlayerDuration().takeIf { it > 0 }
+                                    ?: _timeline.value.total.coerceAtLeast(0L)
+                                if (mediaState.progress >= 0L && (mediaState.progress != _timeline.value.current || knownDuration != _timeline.value.total)) {
                                     if (lastTimelineEmitTime.elapsedNow().inWholeMilliseconds >= timelineThrottleMs) {
                                         lastTimelineEmitTime = TimeSource.Monotonic.markNow()
                                         if (_timeline.value.total > 0L) {
                                             _timeline.update {
                                                 it.copy(
-                                                    total = mediaPlayerHandler.getPlayerDuration(),
+                                                    total = knownDuration,
                                                     current = mediaState.progress,
                                                     loading = false,
                                                 )
@@ -385,8 +395,8 @@ class SharedViewModel(
                                             _timeline.update {
                                                 it.copy(
                                                     current = mediaState.progress,
-                                                    loading = true,
-                                                    total = mediaPlayerHandler.getPlayerDuration(),
+                                                    loading = knownDuration <= 0,
+                                                    total = knownDuration,
                                                 )
                                             }
                                         }
@@ -404,7 +414,7 @@ class SharedViewModel(
                                 _timeline.update {
                                     it.copy(
                                         bufferedPercent = mediaState.bufferedPercentage,
-                                        total = mediaState.duration,
+                                        total = mediaState.duration.takeIf { it > 0 } ?: mediaPlayerHandler.getPlayerDuration(),
                                         loading = true,
                                     )
                                 }
@@ -415,7 +425,7 @@ class SharedViewModel(
                                     it.copy(
                                         current = mediaPlayerHandler.getProgress(),
                                         loading = false,
-                                        total = mediaState.duration,
+                                        total = mediaState.duration.takeIf { it > 0 } ?: mediaPlayerHandler.getPlayerDuration(),
                                     )
                                 }
                             }
@@ -917,6 +927,8 @@ class SharedViewModel(
         isTranslatedLyrics: Boolean,
         lyricsProvider: LyricsProvider = LyricsProvider.NOTHINGPLAYER,
     ) {
+        // A late result from a previous song must not erase the current song's lyrics.
+        if (_nowPlayingState.value?.songEntity?.videoId != videoId) return
         if (inputLyrics == null) {
             _nowPlayingScreenData.update {
                 it.copy(
@@ -1142,69 +1154,66 @@ class SharedViewModel(
         }
     }
 
-    private fun getLyricsFromFormat(
-        isVideo: Boolean,
-        song: SongEntity,
-        duration: Int,
-    ) {
-        viewModelScope.launch {
+    private var lyricsRequestJob: Job? = null
+
+    private fun getLyricsFromFormat(isVideo: Boolean, song: SongEntity, duration: Int) {
+        lyricsRequestJob?.cancel()
+        lyricsRequestJob = viewModelScope.launch {
             val videoId = song.videoId
-            log("Get Lyrics From Format for $videoId", LogLevel.WARN)
-            val artistName = song.artistName
-            val artist =
-                if (artistName?.firstOrNull() != null &&
-                    artistName
-                        .firstOrNull()
-                        ?.contains("Various Artists") == false
-                ) {
-                    artistName.firstOrNull()
-                } else {
-                    mediaPlayerHandler.nowPlaying
-                        .first()
-                        ?.metadata
-                        ?.artist
-                        ?: ""
-                }
+            val artist = song.artistName?.firstOrNull().orEmpty()
+            val knownDuration = duration.takeIf { it > 0 } ?: song.durationSeconds.takeIf { it > 0 }
             resetLyricsVoteState()
-            val lyricsProvider = dataStoreManager.lyricsProvider.first()
-            when (lyricsProvider) {
-                DataStoreManager.NOTHINGPLAYER -> {
-                    getNothingPlayerLyrics(
-                        videoId,
-                        song,
-                        (artist ?: ""),
-                        duration,
-                    )
+            try {
+                val saved = kotlinx.coroutines.withTimeoutOrNull(3_000) {
+                    lyricsCanvasRepository.getSavedLyrics(videoId).firstOrNull()?.toLyrics()
                 }
-
-                DataStoreManager.LRCLIB -> {
-                    getLrclibLyrics(
-                        song,
-                        (artist ?: ""),
-                        duration,
-                    )
+                if (!saved?.lines.isNullOrEmpty()) {
+                    updateLyrics(videoId, knownDuration ?: 0, saved, false, LyricsProvider.OFFLINE)
+                    getAITranslationLyrics(videoId, saved!!)
                 }
-
-                DataStoreManager.YOUTUBE -> {
-                    getYouTubeCaption(
-                        videoId,
-                        song,
-                        (artist ?: ""),
-                        duration,
-                    )
+                val selected = dataStoreManager.lyricsProvider.first()
+                val spotifyFallback = if (dataStoreManager.spotifyLyrics.first() == TRUE) listOf("spotify_fallback") else emptyList()
+                val providers = (listOf(selected) + spotifyFallback + listOf(DataStoreManager.LRCLIB, DataStoreManager.NOTHINGPLAYER)).distinct()
+                for (provider in providers) {
+                    var translated: Lyrics? = null
+                    val result = try {
+                        kotlinx.coroutines.withTimeoutOrNull(12_000) {
+                            when (provider) {
+                                DataStoreManager.YOUTUBE -> {
+                                    val captions = lyricsCanvasRepository.getYouTubeCaption(
+                                        dataStoreManager.youtubeSubtitleLanguage.first(), videoId).firstOrNull()?.data
+                                    translated = captions?.second
+                                    captions?.first
+                                }
+                                "spotify_fallback" -> lyricsCanvasRepository.getSpotifyLyrics(dataStoreManager, "${song.title} $artist", knownDuration).firstOrNull()?.data
+                                DataStoreManager.BETTER_LYRICS -> lyricsCanvasRepository.getBetterLyrics(artist, song.title, knownDuration).firstOrNull()?.data
+                                DataStoreManager.NOTHINGPLAYER -> lyricsCanvasRepository.getNothingPlayerLyrics(videoId).firstOrNull()?.data
+                                else -> lyricsCanvasRepository.getLrclibLyricsData(artist, song.title, knownDuration).firstOrNull()?.data
+                            }
+                        }
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                    catch (_: Exception) { null }
+                    if (result?.lines.isNullOrEmpty()) continue
+                    val source = when (provider) {
+                        "spotify_fallback" -> LyricsProvider.SPOTIFY
+                        DataStoreManager.YOUTUBE -> LyricsProvider.YOUTUBE
+                        DataStoreManager.BETTER_LYRICS -> LyricsProvider.BETTER_LYRICS
+                        DataStoreManager.NOTHINGPLAYER -> LyricsProvider.NOTHINGPLAYER
+                        else -> LyricsProvider.LRCLIB
+                    }
+                    updateLyrics(videoId, knownDuration ?: 0, result, false, source)
+                    insertLyrics(result!!.toLyricsEntity(videoId))
+                    if (translated != null) updateLyrics(videoId, knownDuration ?: 0, translated, true, source)
+                    else if (source == LyricsProvider.NOTHINGPLAYER) {
+                        kotlinx.coroutines.withTimeoutOrNull(12_000) { getNothingPlayerTranslatedLyrics(videoId, result) }
+                            ?: getAITranslationLyrics(videoId, result)
+                    } else getAITranslationLyrics(videoId, result)
+                    return@launch
                 }
-
-                DataStoreManager.BETTER_LYRICS -> {
-                    getBetterLyrics(
-                        song,
-                        (artist ?: "").toString(),
-                        duration,
-                    )
-                }
-            }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (error: Exception) { Logger.w(tag, "Lyrics lookup failed for $videoId: ${error::class.simpleName}") }
         }
     }
-
     private suspend fun getNothingPlayerLyrics(
         videoId: String,
         song: SongEntity,
@@ -1561,7 +1570,7 @@ class SharedViewModel(
         viewModelScope.launch {
             val songEntity = nowPlayingState.value?.songEntity ?: return@launch
             val isVideo = nowPlayingState.value?.mediaItem?.isVideo() ?: false
-            getLyricsFromFormat(isVideo, songEntity, timeline.value.total.toInt() / 1000)
+            getLyricsFromFormat(isVideo, songEntity, (timeline.value.total / 1000).takeIf { it > 0 }?.toInt() ?: songEntity.durationSeconds.coerceAtLeast(0))
         }
     }
 

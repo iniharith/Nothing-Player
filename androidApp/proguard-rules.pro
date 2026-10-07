@@ -229,3 +229,22 @@
 -keepclassmembers class androidx.media3.common.ForwardingPlayer {
     private final androidx.media3.common.Player player;
 }
+
+# The stable player router intercepts these two proxy methods by name.
+-keepclassmembers interface androidx.media3.common.Player {
+    public void addListener(androidx.media3.common.Player$Listener);
+    public void removeListener(androidx.media3.common.Player$Listener);
+}
+
+# Listener proxy bridges normalize these callback arguments by method name.
+-keepclassmembers interface androidx.media3.common.Player$Listener {
+    public void onPlayWhenReadyChanged(boolean, int);
+    public void onPlaybackStateChanged(int);
+    public void onPlaybackSuppressionReasonChanged(int);
+    public void onMediaMetadataChanged(androidx.media3.common.MediaMetadata);
+}
+
+# These callback implementations are invoked through the listener proxy.
+-keepclassmembers class * implements androidx.media3.common.Player$Listener {
+    public void on*(...);
+}

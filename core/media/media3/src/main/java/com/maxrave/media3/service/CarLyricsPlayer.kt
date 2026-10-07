@@ -9,7 +9,9 @@ import com.maxrave.domain.data.model.metadata.Line
 import com.maxrave.domain.data.model.metadata.Lyrics
 import com.maxrave.domain.manager.DataStoreManager
 import com.maxrave.domain.repository.LyricsCanvasRepository
+import com.maxrave.media3.exoplayer.forwardingListener
 import com.maxrave.domain.utils.toLyrics
+import com.maxrave.domain.utils.toSyncedLyrics
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.util.IdentityHashMap
@@ -20,6 +22,7 @@ internal class CarLyricsPlayer(
     private val base: Player,
     private val settings: DataStoreManager,
     private val repository: LyricsCanvasRepository,
+    private val setPlaybackIntent: ((Boolean) -> Unit)? = null,
 ) : ForwardingPlayer(base) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val connected = MutableStateFlow(false)
@@ -29,6 +32,7 @@ internal class CarLyricsPlayer(
     private var display: Pair<String, String>? = null
     private val observer = object : Player.Listener {
         override fun onMediaItemTransition(item: androidx.media3.common.MediaItem?, reason: Int) {
+            if (track.value == item?.mediaId) return
             clear()
             track.value = item?.mediaId
         }
@@ -45,7 +49,7 @@ internal class CarLyricsPlayer(
                 val metadata = base.mediaMetadata
                 val duration = base.duration.takeIf { it > 0 }?.div(1000)?.toInt()
                 val lyrics = try { withTimeoutOrNull(20_000) {
-                    val saved = repository.getSavedLyrics(id).firstOrNull()?.toLyrics()
+                    val saved = repository.getSavedLyrics(id).firstOrNull()?.toLyrics()?.toSyncedLyrics()
                     if (saved?.syncType == "LINE_SYNCED" && !saved.lines.isNullOrEmpty()) saved else {
                         val provider = settings.lyricsProvider.first()
                         val result = if (provider == DataStoreManager.YOUTUBE) {
@@ -55,8 +59,9 @@ internal class CarLyricsPlayer(
                             DataStoreManager.BETTER_LYRICS -> repository.getBetterLyrics(metadata.artist.toString(), metadata.title.toString(), duration)
                             else -> repository.getLrclibLyricsData(metadata.artist?.toString().orEmpty(), metadata.title?.toString().orEmpty(), duration)
                         }.firstOrNull()?.data
-                        if (result?.syncType == "LINE_SYNCED") result else
-                            repository.getLrclibLyricsData(metadata.artist?.toString().orEmpty(), metadata.title?.toString().orEmpty(), duration).firstOrNull()?.data
+                        val synced = result?.toSyncedLyrics()
+                        if (synced?.syncType == "LINE_SYNCED") synced else
+                            repository.getLrclibLyricsData(metadata.artist?.toString().orEmpty(), metadata.title?.toString().orEmpty(), duration).firstOrNull()?.data?.toSyncedLyrics()
                     }
                 }
                 } catch (cancelled: CancellationException) {
@@ -78,6 +83,13 @@ internal class CarLyricsPlayer(
 
     fun setCarConnected(value: Boolean) { connected.value = value }
 
+    override fun play() = setPlayWhenReady(true)
+    override fun pause() = setPlayWhenReady(false)
+    override fun setPlayWhenReady(playWhenReady: Boolean) {
+        val command = setPlaybackIntent
+        if (command != null) command(playWhenReady) else super.setPlayWhenReady(playWhenReady)
+    }
+
     private fun ticker() = flow { while (currentCoroutineContext().isActive) { emit(Unit); delay(300) } }
 
     override fun getMediaMetadata(): MediaMetadata = project(base.mediaMetadata)
@@ -90,14 +102,10 @@ internal class CarLyricsPlayer(
 
     override fun addListener(listener: Player.Listener) {
         if (listeners.containsKey(listener)) return
-        val bridge = object : Player.Listener by listener {
-            override fun onEvents(player: Player, events: Player.Events) {
-                listener.onEvents(this@CarLyricsPlayer, events)
-            }
-            override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
-                listener.onMediaMetadataChanged(project(mediaMetadata))
-            }
-        }
+        val bridge = forwardingListener(listener,
+            metadata = ::project,
+            onEvents = { events -> listener.onEvents(this@CarLyricsPlayer, events) },
+        )
         listeners[listener] = bridge
         super.addListener(bridge)
     }

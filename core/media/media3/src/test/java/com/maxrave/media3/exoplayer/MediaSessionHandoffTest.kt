@@ -98,4 +98,92 @@ class MediaSessionHandoffTest {
             assertEquals("Removed listeners must not receive notifications", count, reported.size)
         } finally { delegate.release() }
     }
-}
+    @Test fun playbackRefreshDoesNotReportAnotherTrackTransition() {
+        val delegate = ExoPlayer.Builder(RuntimeEnvironment.getApplication()).build()
+        val stable = DelegatingForwardingPlayer(delegate)
+        var transitions = 0
+        var events = 0
+        stable.addListener(object : Player.Listener {
+            override fun onMediaItemTransition(item: MediaItem?, reason: Int) { transitions++ }
+            override fun onEvents(player: Player, changes: Player.Events) {
+                assertFalse(changes.contains(Player.EVENT_MEDIA_ITEM_TRANSITION))
+                assertTrue(changes.contains(Player.EVENT_PLAY_WHEN_READY_CHANGED))
+                events++
+            }
+        })
+        try {
+            stable.notifyPlaybackStateChanged()
+            assertEquals(0, transitions)
+            assertEquals(1, events)
+        } finally { delegate.release() }
+    }
+    @Test fun cachedSessionReceivesReadyProgressAndExplicitPause() {
+        val context = RuntimeEnvironment.getApplication()
+        val decoder = ExoPlayer.Builder(context).build()
+        decoder.setMediaItem(MediaItem.Builder().setMediaId("progress").setUri("https://example.test/song").build())
+        var state = Player.STATE_BUFFERING
+        var intent = true
+        val delegate = object : ForwardingPlayer(decoder) {
+            override fun getPlaybackState() = state
+            override fun getCurrentTimeline() = object : androidx.media3.exoplayer.source.ForwardingTimeline(decoder.currentTimeline) {
+                override fun getWindow(index: Int, window: androidx.media3.common.Timeline.Window, projection: Long): androidx.media3.common.Timeline.Window =
+                    super.getWindow(index, window, projection).apply { durationUs = 180_000_000L }
+            }
+            override fun getDuration() = 180_000L
+            override fun getCurrentPosition() = 32_000L
+            override fun getContentPosition() = 32_000L
+            override fun isPlaying() = intent && state == Player.STATE_READY
+        }
+        val stable = DelegatingForwardingPlayer(delegate)
+        stable.playbackIntent = { intent }
+        val session = MediaSession.Builder(context, ForwardingSimpleBasePlayer(stable)).build()
+        val future = MediaController.Builder(context, session.token).buildAsync()
+        try {
+            repeat(20) { shadowOf(Looper.getMainLooper()).idle() }
+            val controller = future.get()
+            try {
+                state = Player.STATE_READY
+                stable.notifyPlaybackStateChanged()
+                repeat(20) { shadowOf(Looper.getMainLooper()).idle() }
+                assertEquals(Player.STATE_READY, controller.playbackState)
+                assertEquals(32_000L, controller.currentPosition)
+                assertEquals(180_000L, controller.duration)
+                assertTrue(controller.playWhenReady)
+                intent = false
+                stable.notifyPlaybackStateChanged()
+                repeat(20) { shadowOf(Looper.getMainLooper()).idle() }
+                assertFalse(controller.playWhenReady)
+                assertEquals("progress", controller.currentMediaItem?.mediaId)
+            } finally { controller.release() }
+        } finally { session.release(); decoder.release() }
+    }
+    @Test fun rawAggregateEventsSurviveRoutingAndListenerMigration() {
+        val context = RuntimeEnvironment.getApplication()
+        val first = ExoPlayer.Builder(context).build()
+        val second = ExoPlayer.Builder(context).build()
+        val stable = DelegatingForwardingPlayer(first)
+        var changes = 0
+        val listener = object : Player.Listener {
+            override fun onEvents(player: Player, events: Player.Events) {
+                assertSame(stable, player)
+                if (events.contains(Player.EVENT_PLAY_WHEN_READY_CHANGED)) changes++
+            }
+        }
+        stable.addListener(listener)
+        try {
+            first.playWhenReady = true
+            shadowOf(Looper.getMainLooper()).idle()
+            assertEquals("Raw decoder events must reach the session facade", 1, changes)
+            stable.swapDelegate(second)
+            first.playWhenReady = false
+            shadowOf(Looper.getMainLooper()).idle()
+            assertEquals("The old decoder must no longer notify the session", 1, changes)
+            second.playWhenReady = true
+            shadowOf(Looper.getMainLooper()).idle()
+            assertEquals(2, changes)
+            stable.removeListener(listener)
+            second.playWhenReady = false
+            shadowOf(Looper.getMainLooper()).idle()
+            assertEquals(2, changes)
+        } finally { first.release(); second.release() }
+    }}

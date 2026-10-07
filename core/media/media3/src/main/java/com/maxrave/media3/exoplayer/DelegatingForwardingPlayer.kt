@@ -39,11 +39,26 @@ internal class DelegatingForwardingPlayer private constructor(
     constructor(initialDelegate: Player) : this(PlayerRouting(initialDelegate))
 
     private class PlayerRouting(var target: Player) : java.lang.reflect.InvocationHandler {
+        private val listeners = HashMap<Player.Listener, Player.Listener>()
         val proxy: Player = java.lang.reflect.Proxy.newProxyInstance(
             Player::class.java.classLoader, arrayOf(Player::class.java), this,
         ) as Player
 
         override fun invoke(proxy: Any, method: java.lang.reflect.Method, args: Array<out Any?>?): Any? {
+            // ForwardingPlayer accepts aggregate events only when their player matches
+            // its wrapped player. The raw decoder must therefore report this stable router.
+            if (method.name == "addListener") {
+                val listener = args!![0] as Player.Listener
+                val bridge = listeners.getOrPut(listener) {
+                    forwardingListener(listener) { events -> listener.onEvents(this@PlayerRouting.proxy, events) }
+                }
+                target.addListener(bridge)
+                return null
+            }
+            if (method.name == "removeListener") {
+                listeners.remove(args!![0] as Player.Listener)?.let(target::removeListener)
+                return null
+            }
             if (method.declaringClass == Any::class.java) {
                 return when (method.name) {
                     "equals" -> proxy === args?.firstOrNull()
@@ -213,23 +228,12 @@ internal class DelegatingForwardingPlayer private constructor(
 
     override fun addListener(listener: Player.Listener) {
         if (listenerBridges.containsKey(listener)) return
-        val bridge = object : Player.Listener by listener {
-            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-                listener.onPlayWhenReadyChanged(this@DelegatingForwardingPlayer.playWhenReady, reason)
-            }
-
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                listener.onPlaybackStateChanged(this@DelegatingForwardingPlayer.playbackState)
-            }
-
-            override fun onPlaybackSuppressionReasonChanged(playbackSuppressionReason: Int) {
-                listener.onPlaybackSuppressionReasonChanged(this@DelegatingForwardingPlayer.playbackSuppressionReason)
-            }
-
-            override fun onEvents(player: Player, events: Player.Events) {
-                listener.onEvents(this@DelegatingForwardingPlayer, events)
-            }
-        }
+        val bridge = forwardingListener(listener,
+            playbackIntent = { playWhenReady },
+            playbackState = { playbackState },
+            suppressionReason = { playbackSuppressionReason },
+            onEvents = { events -> listener.onEvents(this@DelegatingForwardingPlayer, events) },
+        )
         listenerBridges[listener] = bridge
         trackedListeners.add(listener)
         super.addListener(bridge)
@@ -498,6 +502,22 @@ internal class DelegatingForwardingPlayer private constructor(
     }
 
     // ========== Manual Event Dispatch ==========
+
+    /** Refresh cached session views without pretending the same track has changed. */
+    fun notifyPlaybackStateChanged() {
+        val events = Player.Events(FlagSet.Builder()
+            .add(Player.EVENT_PLAYBACK_STATE_CHANGED)
+            .add(Player.EVENT_PLAY_WHEN_READY_CHANGED)
+            .add(Player.EVENT_IS_PLAYING_CHANGED)
+            .add(Player.EVENT_PLAYBACK_SUPPRESSION_REASON_CHANGED).build())
+        trackedListeners.toList().forEach { listener ->
+            listener.onPlaybackStateChanged(playbackState)
+            listener.onPlayWhenReadyChanged(playWhenReady, Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
+            listener.onIsPlayingChanged(isPlaying)
+            listener.onPlaybackSuppressionReasonChanged(playbackSuppressionReason)
+            listener.onEvents(this, events)
+        }
+    }
 
     /**
      * Manually notify all tracked listeners about a media item change.

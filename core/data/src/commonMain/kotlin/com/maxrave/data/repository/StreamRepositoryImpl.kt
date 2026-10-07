@@ -16,6 +16,7 @@ import com.maxrave.domain.manager.DataStoreManager
 import com.maxrave.domain.repository.StreamRepository
 import com.maxrave.domain.utils.Resource
 import com.maxrave.kotlinytmusicscraper.YouTube
+import com.maxrave.kotlinytmusicscraper.selectVideoFormat
 import com.maxrave.kotlinytmusicscraper.models.MediaType
 import com.maxrave.kotlinytmusicscraper.models.response.PlayerResponse
 import com.maxrave.logger.Logger
@@ -114,8 +115,7 @@ internal class StreamRepositoryImpl(
                     18
                 }
             // 134, 136, 137
-            youTube
-                .player(videoId, noLogIn = muxed)
+            (if (isVideo && !muxed) youTube.videoPlayer(videoId) else youTube.player(videoId, noLogIn = muxed))
                 .onSuccess { data ->
                     val response = data.second
                     if (data.third == MediaType.Song) {
@@ -146,11 +146,11 @@ internal class StreamRepositoryImpl(
                             ?: emptyList(),
                     )
                     Logger.w("Stream", "Get stream for video $isVideo")
-                    val videoFormat =
-                        formatList.find { it.itag == videoItag }
-                            ?: formatList.find { it.itag == 136 }
-                            ?: formatList.find { it.itag == 134 }
-                            ?: formatList.find { !it.isAudio && it.url.isNullOrEmpty().not() }
+                    val videoFormat = selectVideoFormat(formatList, when (videoItag) {
+                        137 -> 1080
+                        136 -> 720
+                        else -> 360
+                    })
                     val audioFormat =
                         formatList.find { it.itag == itag } ?: if (itag == 774) {
                             formatList.find { it.itag == 141 }

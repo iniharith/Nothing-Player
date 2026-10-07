@@ -50,4 +50,23 @@ class VideoPlaybackProbeTest {
             }
         }
     }
-}
+    @Test fun probe1080VideoSelection() = runBlocking {
+        if (System.getenv("NOTHING_VIDEO_PROBE") != "1") return@runBlocking
+        withTimeout(120_000) {
+            val response = YouTube().videoPlayer("aqz-KE-bpKQ").getOrThrow().second
+            val formats = response.streamingData?.let { it.formats.orEmpty() + it.adaptiveFormats }.orEmpty()
+            val selected = selectVideoFormat(formats, 1080)
+            println("QUALITY_PROBE heights=${formats.filter { !it.isAudio }.map { it.height }.distinct()} selected=${selected?.itag}/${selected?.height}")
+            assertTrue(selected?.height == 1080, "1080p selection must find the sample's 1080p adaptive stream")
+            val connection = URI(selected!!.url!!).toURL().openConnection() as HttpURLConnection
+            connection.connectTimeout = 15000
+            connection.readTimeout = 15000
+            connection.setRequestProperty("Range", "bytes=0-1023")
+            try {
+                val status = connection.responseCode
+                println("QUALITY_PROBE status=$status")
+                assertTrue(status in 200..299, "Selected high-quality stream must be reachable")
+                connection.inputStream.use { assertTrue(it.read() >= 0) }
+            } finally { connection.disconnect() }
+        }
+    }}

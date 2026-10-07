@@ -129,6 +129,11 @@ private const val TAG = "YouTubeScraper"
 class YouTube {
     suspend fun accountHomeVideos() = runCatching { ytMusic.accountHomeVideos() }
 
+    /** Video playback needs the full adaptive list, including high frame-rate and WebM formats. */
+    fun videoPlayer(videoId: String) = runCatching {
+        Triple("", ytMusic.regularVideoPlayer(videoId), MediaType.Video)
+    }
+
     fun searchRegularVideos(query: String) = runCatching { ytMusic.searchRegularVideos(query) }
     private val ytMusic = Ytmusic()
 

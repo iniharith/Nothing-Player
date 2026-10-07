@@ -650,6 +650,11 @@ internal class CrossfadeExoPlayerAdapter(
                 commitIncomingAsCurrentInternal()
             }
 
+            // Decoder state can lag behind adapter state during preparation or focus loss.
+            // A user pause must silence every audible decoder in all states.
+            currentPlayer?.pause()
+            secondaryPlayer?.pause()
+
             when (internalState) {
                 InternalState.PLAYING, InternalState.READY -> {
                     currentPlayer?.let { player ->
@@ -669,7 +674,7 @@ internal class CrossfadeExoPlayerAdapter(
             }
             // A user pause during focus suppression may not change the delegate's
             // already-paused state, so explicitly clear the session's resume intent.
-            forwardingPlayer.notifyMediaItemChanged()
+            forwardingPlayer.notifyPlaybackStateChanged()
         }
     }
 
@@ -1102,7 +1107,7 @@ internal class CrossfadeExoPlayerAdapter(
             castRemotePlayer?.let { remote ->
                 return remote.duration.takeIf { it > 0 } ?: 0L
             }
-            return currentPlayer?.duration ?: cachedDuration
+            return currentPlayer?.duration?.takeIf { it > 0 } ?: cachedDuration.coerceAtLeast(0L)
         }
 
     override val bufferedPosition: Long
@@ -1452,6 +1457,8 @@ internal class CrossfadeExoPlayerAdapter(
         // A transition can persist the new track immediately. Reset its position
         // before notifying listeners so it never inherits the previous song's time.
         cachedPosition = startPositionMs.coerceAtLeast(0L)
+        cachedDuration = 0L
+        cachedBufferedPosition = 0L
 
         val mediaItem = playlist[index]
         val videoId = mediaItem.mediaId
@@ -1786,6 +1793,10 @@ internal class CrossfadeExoPlayerAdapter(
                     if (player != currentPlayer) {
                         Logger.d(TAG, "Ignoring onPlaybackStateChanged from non-current player")
                         return
+                    }
+                    if (events.containsAny(Player.EVENT_PLAYBACK_STATE_CHANGED, Player.EVENT_PLAY_WHEN_READY_CHANGED,
+                            Player.EVENT_IS_PLAYING_CHANGED, Player.EVENT_PLAYBACK_SUPPRESSION_REASON_CHANGED)) {
+                        forwardingPlayer.notifyPlaybackStateChanged()
                     }
                     val shouldBePlaying =
                         !(player.playbackState == Player.STATE_ENDED || !player.playWhenReady)

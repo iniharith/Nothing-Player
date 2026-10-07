@@ -26,7 +26,7 @@ import org.koin.core.qualifier.named
 
 /** Uses the application's current player; never starts a second audio/video player. */
 @Composable
-fun VideoPlaybackSettings(modifier: Modifier = Modifier, alignRight: Boolean = false) {
+fun VideoPlaybackSettings(modifier: Modifier = Modifier, alignRight: Boolean = true) {
     val player: Player = koinInject(named(Config.MAIN_PLAYER))
     val settings: DataStoreManager = koinInject()
     val repository: LyricsCanvasRepository = koinInject()
