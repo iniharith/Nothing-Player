@@ -1155,9 +1155,12 @@ class SharedViewModel(
     }
 
     private var lyricsRequestJob: Job? = null
+    private var lyricsRequestId: String? = null
 
-    private fun getLyricsFromFormat(isVideo: Boolean, song: SongEntity, duration: Int) {
+    private fun getLyricsFromFormat(isVideo: Boolean, song: SongEntity, duration: Int, force: Boolean = false) {
+        if (!force && lyricsRequestId == song.videoId && lyricsRequestJob?.isActive == true) return
         lyricsRequestJob?.cancel()
+        lyricsRequestId = song.videoId
         lyricsRequestJob = viewModelScope.launch {
             val videoId = song.videoId
             val artist = song.artistName?.firstOrNull().orEmpty()
@@ -1173,11 +1176,13 @@ class SharedViewModel(
                 }
                 val selected = dataStoreManager.lyricsProvider.first()
                 val spotifyFallback = if (dataStoreManager.spotifyLyrics.first() == TRUE) listOf("spotify_fallback") else emptyList()
-                val providers = (listOf(selected) + spotifyFallback + listOf(DataStoreManager.LRCLIB, DataStoreManager.NOTHINGPLAYER)).distinct()
+                val providers = (listOf(selected) + spotifyFallback + listOf(DataStoreManager.LRCLIB, DataStoreManager.NOTHINGPLAYER, DataStoreManager.BETTER_LYRICS) + if (isVideo) listOf(DataStoreManager.YOUTUBE) else emptyList()).distinct()
+                for (retry in 0..1) {
+                if (retry > 0) kotlinx.coroutines.delay(3_000)
                 for (provider in providers) {
                     var translated: Lyrics? = null
                     val result = try {
-                        kotlinx.coroutines.withTimeoutOrNull(12_000) {
+                        kotlinx.coroutines.withTimeoutOrNull(8_000) {
                             when (provider) {
                                 DataStoreManager.YOUTUBE -> {
                                     val captions = lyricsCanvasRepository.getYouTubeCaption(
@@ -1209,6 +1214,7 @@ class SharedViewModel(
                             ?: getAITranslationLyrics(videoId, result)
                     } else getAITranslationLyrics(videoId, result)
                     return@launch
+                }
                 }
             } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
             catch (error: Exception) { Logger.w(tag, "Lyrics lookup failed for $videoId: ${error::class.simpleName}") }
@@ -1570,7 +1576,7 @@ class SharedViewModel(
         viewModelScope.launch {
             val songEntity = nowPlayingState.value?.songEntity ?: return@launch
             val isVideo = nowPlayingState.value?.mediaItem?.isVideo() ?: false
-            getLyricsFromFormat(isVideo, songEntity, (timeline.value.total / 1000).takeIf { it > 0 }?.toInt() ?: songEntity.durationSeconds.coerceAtLeast(0))
+            getLyricsFromFormat(isVideo, songEntity, (timeline.value.total / 1000).takeIf { it > 0 }?.toInt() ?: songEntity.durationSeconds.coerceAtLeast(0), force = true)
         }
     }
 

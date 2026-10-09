@@ -42,38 +42,37 @@ internal class CarLyricsPlayer(
     init {
         base.addListener(observer)
         scope.launch {
-            combine(connected, settings.androidAutoLyrics, track) { car, enabled, id ->
-                id.takeIf { car && enabled == DataStoreManager.TRUE }
+            combine(connected, settings.androidAutoLyrics, track, settings.lyricsProvider, settings.youtubeSubtitleLanguage) { car, enabled, id, provider, language ->
+                Triple(id.takeIf { car && enabled == DataStoreManager.TRUE }, provider, language)
             }.distinctUntilChanged().collectLatest { id ->
                 clear()
-                if (id == null) return@collectLatest
-                val metadata = base.mediaMetadata
-                val duration = base.duration.takeIf { it > 0 }?.div(1000)?.toInt()
-                val lyrics = try { withTimeoutOrNull(20_000) {
-                    val saved = repository.getSavedLyrics(id).firstOrNull()?.toLyrics()?.toSyncedLyrics()
-                    if (saved?.syncType == "LINE_SYNCED" && !saved.lines.isNullOrEmpty()) saved else {
-                        val provider = settings.lyricsProvider.first()
-                        val result = if (provider == DataStoreManager.YOUTUBE) {
-                            repository.getYouTubeCaption(settings.youtubeSubtitleLanguage.first(), id).firstOrNull()?.data?.first
-                        } else when (provider) {
-                            DataStoreManager.NOTHINGPLAYER -> repository.getNothingPlayerLyrics(id)
-                            DataStoreManager.BETTER_LYRICS -> repository.getBetterLyrics(metadata.artist.toString(), metadata.title.toString(), duration)
-                            else -> repository.getLrclibLyricsData(metadata.artist?.toString().orEmpty(), metadata.title?.toString().orEmpty(), duration)
-                        }.firstOrNull()?.data
-                        val synced = result?.toSyncedLyrics()
-                        if (synced?.syncType == "LINE_SYNCED") synced else
-                            repository.getLrclibLyricsData(metadata.artist?.toString().orEmpty(), metadata.title?.toString().orEmpty(), duration).firstOrNull()?.data?.toSyncedLyrics()
+                val mediaId = id.first ?: return@collectLatest
+                var lyrics: Lyrics? = attempt { repository.getSavedLyrics(mediaId).firstOrNull()?.toLyrics() }
+                val providers = (listOf(id.second, DataStoreManager.LRCLIB, DataStoreManager.NOTHINGPLAYER, DataStoreManager.BETTER_LYRICS)).distinct()
+                for (retry in 0..2) {
+                    if (lyrics != null) break
+                    if (retry > 0) delay(if (retry == 1) 3_000 else 15_000)
+                    // Read metadata again after a retry; the initial decoder may not yet have duration.
+                    val metadata = base.mediaMetadata
+                    val duration = base.duration.takeIf { it > 0 }?.div(1000)?.toInt()
+                    for (provider in providers) {
+                        lyrics = attempt {
+                            when (provider) {
+                                DataStoreManager.YOUTUBE -> repository.getYouTubeCaption(id.third, mediaId).firstOrNull()?.data?.first
+                                DataStoreManager.NOTHINGPLAYER -> repository.getNothingPlayerLyrics(mediaId).firstOrNull()?.data
+                                DataStoreManager.BETTER_LYRICS -> repository.getBetterLyrics(metadata.artist?.toString().orEmpty(), metadata.title?.toString().orEmpty(), duration).firstOrNull()?.data
+                                else -> repository.getLrclibLyricsData(metadata.artist?.toString().orEmpty(), metadata.title?.toString().orEmpty(), duration).firstOrNull()?.data
+                            }
+                        }
+                        if (lyrics != null) break
                     }
                 }
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Exception) { null }
-                if (lyrics?.syncType != "LINE_SYNCED") return@collectLatest
-                combine(settings.songLyricsOffset(id), ticker()) { offset, _ -> offset }.collect { offset ->
-                    if (base.currentMediaItem?.mediaId != id) return@collect
-                    val next = lyricWindow(lyrics.lines.orEmpty(), base.currentPosition - offset)
-                    if (display != next || lyricId != id) {
-                        lyricId = id
+                val synced = lyrics ?: return@collectLatest
+                combine(settings.songLyricsOffset(mediaId), ticker()) { offset, _ -> offset }.collect { offset ->
+                    if (base.currentMediaItem?.mediaId != mediaId) return@collect
+                    val next = lyricWindow(synced.lines.orEmpty(), base.currentPosition - offset)
+                    if (display != next || lyricId != mediaId) {
+                        lyricId = mediaId
                         display = next
                         notifyMetadata()
                     }
@@ -83,6 +82,13 @@ internal class CarLyricsPlayer(
     }
 
     fun setCarConnected(value: Boolean) { connected.value = value }
+
+    private suspend fun attempt(fetch: suspend () -> Lyrics?): Lyrics? = try {
+        withTimeoutOrNull(8_000) { fetch()?.toSyncedLyrics()?.takeIf {
+            it.syncType == "LINE_SYNCED" && it.lines.orEmpty().any { line -> line.startTimeMs.toLongOrNull() != null && line.words.isNotBlank() }
+        } }
+    } catch (cancelled: CancellationException) { throw cancelled }
+    catch (_: Exception) { null }
 
     override fun play() = setPlayWhenReady(true)
     override fun pause() = setPlayWhenReady(false)

@@ -31,6 +31,8 @@ class CarPauseCommandTest {
             arrayOf(DataStoreManager::class.java)) { _, method, _ ->
             when (method.name) {
                 "getAndroidAutoLyrics" -> MutableStateFlow(DataStoreManager.FALSE)
+                "getLyricsProvider" -> MutableStateFlow(DataStoreManager.NOTHINGPLAYER)
+                "getYoutubeSubtitleLanguage" -> MutableStateFlow("en")
                 else -> error("Unexpected settings access: ${method.name}")
             }
         } as DataStoreManager

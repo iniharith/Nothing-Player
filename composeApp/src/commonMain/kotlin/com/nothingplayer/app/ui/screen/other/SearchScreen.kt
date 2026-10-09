@@ -646,7 +646,10 @@ fun SearchScreen(
                             state = pullToRefreshState,
                             onRefresh = {
                                 val query = searchText.trim()
-                                if (query.isNotEmpty()) {
+                                if (videosOnly) {
+                                    showVideoHistory = false
+                                    searchViewModel.searchVideos(query)
+                                } else if (query.isNotEmpty()) {
                                     isSearchSubmitted = true
                                     searchViewModel.insertSearchHistory(query)
                                     when (searchScreenState.searchType) {

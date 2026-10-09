@@ -17,6 +17,8 @@ internal class CarPlaybackResumptionGate<T> {
         return controllers.isEmpty()
     }
 
+    fun isConnected(controller: T): Boolean = controller in controllers
+
     fun onUserPause() {
         if (controllers.isNotEmpty()) pausedByUser = true
     }

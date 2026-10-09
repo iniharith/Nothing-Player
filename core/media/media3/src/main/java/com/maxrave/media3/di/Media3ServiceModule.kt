@@ -208,7 +208,7 @@ private val mediaServiceModule =
         }
 
         // MediaSession Callback for main player
-        single<MediaLibrarySession.Callback>(createdAtStart = true) {
+        factory<MediaLibrarySession.Callback> {
             SimpleMediaSessionCallback(
                 androidApplication(),
                 get<CoroutineScope>(named(SERVICE_SCOPE)),

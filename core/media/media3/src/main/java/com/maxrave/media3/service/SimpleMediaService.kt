@@ -224,7 +224,7 @@ internal class SimpleMediaService : MediaLibraryService(), KoinComponent {
 
     override fun onDestroy() {
         Logger.playbackEvent("service-destroyed intent=${simpleMediaServiceHandler.player.playWhenReady} items=${simpleMediaServiceHandler.player.mediaItemCount} state=${simpleMediaServiceHandler.player.playbackState}")
-        (simpleMediaSessionCallback as? SimpleMediaSessionCallback)?.onCarConnectionChanged = {}
+        (simpleMediaSessionCallback as? SimpleMediaSessionCallback)?.close()
         if (::carLyricsPlayer.isInitialized) carLyricsPlayer.close()
         preparationHandler.removeCallbacksAndMessages(null)
         // The handler/player are DI singletons. Cancelling their shared scope here

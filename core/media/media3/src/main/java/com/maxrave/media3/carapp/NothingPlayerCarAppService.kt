@@ -4,6 +4,8 @@ import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.support.v4.media.session.MediaSessionCompat
 import androidx.car.app.CarAppService
 import androidx.car.app.CarContext
@@ -53,6 +55,17 @@ internal class NothingPlayerCarAppService : CarAppService() {
 @UnstableApi
 internal class NothingPlayerCarSession : Session() {
     private var browserFuture: ListenableFuture<MediaBrowser>? = null
+    private val reconnectHandler = Handler(Looper.getMainLooper())
+    private var reconnectAttempts = 0
+    private val reconnect = Runnable {
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.CREATED)) connectAndRegisterPlaybackToken()
+    }
+
+    private fun scheduleReconnect() {
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.CREATED) || reconnectAttempts >= 3) return
+        reconnectHandler.removeCallbacks(reconnect)
+        reconnectHandler.postDelayed(reconnect, 1_000L shl reconnectAttempts++)
+    }
 
     init {
         lifecycle.addObserver(
@@ -62,8 +75,10 @@ internal class NothingPlayerCarSession : Session() {
                 }
 
                 override fun onDestroy(owner: LifecycleOwner) {
-                    browserFuture?.let { MediaController.releaseFuture(it) }
+                    reconnectHandler.removeCallbacksAndMessages(null)
+                    val previous = browserFuture
                     browserFuture = null
+                    previous?.let { MediaController.releaseFuture(it) }
                 }
             },
         )
@@ -110,11 +125,8 @@ internal class NothingPlayerCarSession : Session() {
                         override fun onDisconnected(controller: MediaController) {
                             // Media service died mid-drive: rebuild the browser and hand
                             // the host a fresh token, else it keeps rendering a stale one
-                            browserFuture?.let { MediaController.releaseFuture(it) }
                             browserFuture = null
-                            if (lifecycle.currentState.isAtLeast(Lifecycle.State.CREATED)) {
-                                connectAndRegisterPlaybackToken()
-                            }
+                            scheduleReconnect()
                         }
                     },
                 ).buildAsync()
@@ -123,7 +135,8 @@ internal class NothingPlayerCarSession : Session() {
     private fun connectAndRegisterPlaybackToken() {
         val mainExecutor = ContextCompat.getMainExecutor(carContext)
         val future = ensureBrowser()
-        future.addListener({
+        future.addListener(connectionListener@{
+            if (browserFuture !== future || !lifecycle.currentState.isAtLeast(Lifecycle.State.CREATED)) return@connectionListener
             runCatching {
                 val browser = future.get()
                 val resultFuture =
@@ -131,7 +144,8 @@ internal class NothingPlayerCarSession : Session() {
                         SessionCommand(MEDIA_CUSTOM_COMMAND.GET_PLATFORM_TOKEN, Bundle.EMPTY),
                         Bundle.EMPTY,
                     )
-                resultFuture.addListener({
+                resultFuture.addListener(tokenListener@{
+                    if (browserFuture !== future || !lifecycle.currentState.isAtLeast(Lifecycle.State.CREATED)) return@tokenListener
                     runCatching {
                         val result = resultFuture.get()
                         val platformToken =
@@ -143,6 +157,7 @@ internal class NothingPlayerCarSession : Session() {
                         if (result.resultCode == SessionResult.RESULT_SUCCESS && platformToken != null) {
                             (carContext.getCarService(CarContext.MEDIA_PLAYBACK_SERVICE) as MediaPlaybackManager)
                                 .registerMediaPlaybackToken(MediaSessionCompat.Token.fromToken(platformToken))
+                            reconnectAttempts = 0
                         } else {
                             Logger.e(TAG, "Platform token missing from ${MEDIA_CUSTOM_COMMAND.GET_PLATFORM_TOKEN} result")
                         }
@@ -152,6 +167,9 @@ internal class NothingPlayerCarSession : Session() {
                 }, mainExecutor)
             }.onFailure {
                 Logger.e(TAG, "MediaBrowser connection failed: ${it.message}")
+                browserFuture = null
+                MediaController.releaseFuture(future)
+                scheduleReconnect()
             }
         }, mainExecutor)
     }

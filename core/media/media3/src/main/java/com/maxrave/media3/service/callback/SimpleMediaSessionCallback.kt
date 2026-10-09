@@ -95,10 +95,11 @@ internal class SimpleMediaSessionCallback(
     private var carPlayer: Player? = null
     private var carSession: MediaSession? = null
     private var pendingRadioTrack: String? = null
+    private var applyingCarResume = false
     private val carPlayerListener =
         object : Player.Listener {
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-                if (!playWhenReady && carPlayer?.playWhenReady != true && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST) {
+                if (!applyingCarResume && !playWhenReady && carPlayer?.playWhenReady != true && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST) {
                     carResumeGate.onUserPause()
                     carResumeJob?.cancel()
                     cancelPlaybackPreparation()
@@ -117,8 +118,24 @@ internal class SimpleMediaSessionCallback(
 
     var onCarConnectionChanged: (Boolean) -> Unit = {}
 
+    fun close() {
+        carResumeJob?.cancel()
+        carResumeJob = null
+        carPlayer?.removeListener(carPlayerListener)
+        carPlayer = null
+        carSession = null
+        carResumeGate.reset()
+        onCarConnectionChanged = {}
+        prepareForPlayback = { false }
+        cancelPlaybackPreparation = {}
+    }
+
     override fun onPostConnect(session: MediaSession, controller: MediaSession.ControllerInfo) {
         if (!isCarController(session, controller)) return
+        connectCar(session, controller)
+    }
+
+    private fun connectCar(session: MediaSession, controller: MediaSession.ControllerInfo) {
         if (carSession !== session) {
             carResumeJob?.cancel()
             carPlayer?.removeListener(carPlayerListener)
@@ -140,6 +157,7 @@ internal class SimpleMediaSessionCallback(
                     if (!carResumeGate.canAutomaticallyResume() || alreadyHasPlayback) return@launch
                     if (mediaPlayerHandler.player.currentMediaItem == null && savedQueue == null) return@launch
                     if (!prepareForPlayback()) return@launch
+                    applyingCarResume = true
                     if (mediaPlayerHandler.player.currentMediaItem == null) {
                         if (savedQueue == null) return@launch
                         setRestoredQueue(savedQueue)
@@ -157,12 +175,14 @@ internal class SimpleMediaSessionCallback(
                     throw cancelled
                 } catch (error: Exception) {
                     Logger.e(TAG, "Car playback resumption failed: ${error.message}")
+                } finally {
+                    applyingCarResume = false
                 }
             }
     }
 
     override fun onDisconnected(session: MediaSession, controller: MediaSession.ControllerInfo) {
-        if (carSession !== session || !isCarController(session, controller) || !carResumeGate.disconnect(controller)) return
+        if (carSession !== session || !carResumeGate.isConnected(controller) || !carResumeGate.disconnect(controller)) return
         onCarConnectionChanged(false)
         carResumeJob?.cancel()
         carResumeJob = null
@@ -192,6 +212,8 @@ internal class SimpleMediaSessionCallback(
 
     private fun isCarController(session: MediaSession, controller: MediaSession.ControllerInfo): Boolean =
         session.isAutoCompanionController(controller) ||
+            (controller.packageName == "com.google.android.projection.gearhead" &&
+                context.packageManager.getPackagesForUid(controller.uid)?.contains(controller.packageName) == true) ||
             (controller.uid == android.os.Process.myUid() &&
                 controller.packageName == context.packageName &&
                 controller.connectionHints.getBoolean(CAR_BROWSER_CONNECTION_HINT))
@@ -328,8 +350,15 @@ internal class SimpleMediaSessionCallback(
         session: MediaLibrarySession,
         browser: MediaSession.ControllerInfo,
         params: MediaLibraryService.LibraryParams?,
-    ): ListenableFuture<LibraryResult<MediaItem>> =
-        Futures.immediateFuture(
+    ): ListenableFuture<LibraryResult<MediaItem>> {
+        // Legacy MediaBrowser hosts browse the root rather than completing Media3's
+        // post-connect handshake. Share the same gate with the modern controller.
+        if (isCarController(session, browser) ||
+            (browser.uid == android.os.Process.myUid() && browser.packageName == context.packageName &&
+                params?.extras?.getBoolean(CAR_BROWSER_CONNECTION_HINT) == true)) {
+            connectCar(session, browser)
+        }
+        return Futures.immediateFuture(
             LibraryResult.ofItem(
                 MediaItem
                     .Builder()
@@ -338,13 +367,14 @@ internal class SimpleMediaSessionCallback(
                         MediaMetadata
                             .Builder()
                             .setIsPlayable(false)
-                            .setIsBrowsable(false)
+                            .setIsBrowsable(true)
                             .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
                             .build(),
                     ).build(),
                 params,
             ),
         )
+    }
 
     override fun onSearch(
         session: MediaLibrarySession,
