@@ -23,6 +23,7 @@ import org.robolectric.annotation.Config
 class MediaSessionHandoffTest {
     @Test fun recoverableIdleGapKeepsBufferingButARealStopDoesNot() {
         val delegate = ExoPlayer.Builder(RuntimeEnvironment.getApplication()).build()
+        delegate.setMediaItem(MediaItem.fromUri("https://example.test/current"))
         val stable = DelegatingForwardingPlayer(delegate)
         var intent = true
         stable.playbackIntent = { intent }

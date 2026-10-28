@@ -210,7 +210,14 @@ internal class DelegatingForwardingPlayer private constructor(
 
 
     override fun getPlaybackState(): Int {
+        // A retry can leave the outgoing decoder's error visible until its replacement
+        // is ready. Media3's state snapshots require an error to be paired with IDLE;
+        // never mask this interval as BUFFERING or discard the actual error.
+        if (playerError != null) return Player.STATE_IDLE
         val state = super.getPlaybackState()
+        // BUFFERING also requires a timeline. The first item may not have reached
+        // the delegate yet when a car or phone controller takes its first snapshot.
+        if (currentTimeline.isEmpty) return if (state == Player.STATE_ENDED) state else Player.STATE_IDLE
         if (preparingNextTrack && playWhenReady && (state == Player.STATE_IDLE || state == Player.STATE_ENDED)) {
             return Player.STATE_BUFFERING
         }
