@@ -27,6 +27,7 @@ import com.maxrave.domain.data.entities.SongEntity
 import com.maxrave.domain.data.model.browse.album.Track
 import com.maxrave.domain.data.model.home.HomeItem
 import com.maxrave.domain.manager.DataStoreManager
+import com.maxrave.domain.manager.CAR_CONNECTION_PLAYBACK
 import com.maxrave.domain.mediaservice.handler.MediaPlayerHandler
 import com.maxrave.domain.mediaservice.handler.PlayerEvent
 import com.maxrave.domain.mediaservice.handler.PlaylistType
@@ -149,6 +150,7 @@ internal class SimpleMediaSessionCallback(
         carResumeJob =
             scope.launch(Dispatchers.Main.immediate) {
                 try {
+                    if (dataStoreManager.getString(CAR_CONNECTION_PLAYBACK).first() == "paused") return@launch
                     val savedQueue = if (mediaPlayerHandler.player.currentMediaItem == null) readPlaybackResumptionQueue() else null
                     // A phone/head-unit pause or a disconnect while Room/DataStore were loading
                     // must win over the automatic resume request.

@@ -1572,6 +1572,8 @@ class SharedViewModel(
         }
     }
 
+    fun retryLyrics() = setLyricsProvider()
+
     private fun setLyricsProvider() {
         viewModelScope.launch {
             val songEntity = nowPlayingState.value?.songEntity ?: return@launch

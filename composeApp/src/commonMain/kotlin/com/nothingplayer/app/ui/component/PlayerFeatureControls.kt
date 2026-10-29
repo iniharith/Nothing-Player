@@ -4,23 +4,29 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.clickable
 import androidx.compose.ui.unit.dp
 import com.maxrave.domain.manager.*
 import com.maxrave.domain.mediaservice.handler.MediaPlayerHandler
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
+import com.nothingplayer.app.viewModel.SharedViewModel
 
 @Composable
 fun PlayerFeatureControls(mediaId: String?, isVideo: Boolean) {
     val settings: DataStoreManager = koinInject()
     val handler: MediaPlayerHandler = koinInject()
+    val shared: SharedViewModel = koinInject()
     val scope = rememberCoroutineScope()
     val videoEnabled by settings.watchVideoInsteadOfPlayingAudio.collectAsState(initial = DataStoreManager.TRUE)
+    val lyricsProvider by settings.lyricsProvider.collectAsState(initial = DataStoreManager.NOTHINGPLAYER)
     val offset by remember(mediaId) { settings.songLyricsOffset(mediaId) }.collectAsState(initial = 0)
     val timer by handler.sleepTimerState.collectAsState()
     var options by remember { mutableStateOf(false) }
     var timing by remember { mutableStateOf(false) }
     var sleep by remember { mutableStateOf(false) }
+    var lyricSources by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
         if (isVideo) TextButton(onClick = { scope.launch { settings.setWatchVideoInsteadOfPlayingAudio(videoEnabled != DataStoreManager.TRUE) } }) {
             Text(if (videoEnabled == DataStoreManager.TRUE) "Audio only" else "Watch video")
@@ -28,11 +34,27 @@ fun PlayerFeatureControls(mediaId: String?, isVideo: Boolean) {
         Box {
             TextButton(onClick = { options = true }) { Text(if (timer.timeRemaining == -1) "Timer: end of song" else if (timer.timeRemaining > 0) "Timer: ${timer.timeRemaining} min" else "Playback options") }
             DropdownMenu(options, { options = false }) {
-                DropdownMenuItem(text = { Text("Lyrics timing") }, onClick = { options = false; timing = true })
+                DropdownMenuItem(text = { Text("Lyrics timing") }, enabled = !mediaId.isNullOrBlank(), onClick = { options = false; timing = true })
+                DropdownMenuItem(text = { Text("Lyrics provider") }, onClick = { options = false; lyricSources = true })
+                DropdownMenuItem(text = { Text("Retry lyrics") }, enabled = !mediaId.isNullOrBlank(), onClick = { options = false; shared.retryLyrics() })
                 DropdownMenuItem(text = { Text("Sleep timer") }, onClick = { options = false; sleep = true })
             }
         }
     }
+    if (lyricSources) AlertDialog(onDismissRequest = { lyricSources = false }, title = { Text("Lyrics provider") }, text = {
+        Column {
+            Text("Choose the first provider to try. Other providers may be used if lyrics are unavailable.", style = MaterialTheme.typography.bodySmall)
+            listOf(DataStoreManager.NOTHINGPLAYER to "Nothing Player", DataStoreManager.LRCLIB to "LRCLIB", DataStoreManager.BETTER_LYRICS to "Better Lyrics", DataStoreManager.YOUTUBE to "YouTube captions").forEach { (value, label) ->
+                Row(Modifier.fillMaxWidth().clickable {
+                    scope.launch { if (value == lyricsProvider) shared.retryLyrics() else settings.setLyricsProvider(value) }
+                    lyricSources = false
+                }, verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected = value == lyricsProvider, onClick = null)
+                    Text(label, Modifier.padding(start = 8.dp))
+                }
+            }
+        }
+    }, confirmButton = { TextButton(onClick = { lyricSources = false }) { Text("Cancel") } })
     if (timing && mediaId != null) AlertDialog(onDismissRequest = { timing = false }, title = { Text("Lyrics timing") }, text = {
         Column {
             Text("Saved for this song. Negative shows lyrics earlier; positive shows them later.")
@@ -61,10 +83,12 @@ fun VideoPreferenceSettings() {
     val wifi by settings.getString(VIDEO_WIFI_QUALITY).collectAsState(initial = null)
     val mobile by settings.getString(VIDEO_MOBILE_QUALITY).collectAsState(initial = null)
     val queue by settings.saveRecentSongAndQueue.collectAsState(initial = DataStoreManager.TRUE)
+    val carPlayback by settings.getString(CAR_CONNECTION_PLAYBACK).collectAsState(initial = null)
     var editing by remember { mutableStateOf<String?>(null) }
     var confirmation by remember { mutableStateOf<String?>(null) }
     Column(Modifier.fillMaxWidth().padding(16.dp)) {
         Text("Playback and video preferences", style = MaterialTheme.typography.titleMedium)
+        TextButton(onClick = { editing = CAR_CONNECTION_PLAYBACK }) { Text("Android Auto connection: ${if (carPlayback == "paused") "Don't auto-resume" else "Resume last playback"}") }
         TextButton(onClick = { editing = VIDEO_WIFI_QUALITY }) { Text("Wi-Fi quality: ${wifi ?: "Auto"}") }
         TextButton(onClick = { editing = VIDEO_MOBILE_QUALITY }) { Text("Mobile data quality: ${mobile ?: "Auto"}") }
         Text("Auto selects up to 1080p on unmetered connections and 360p on mobile or metered connections.", style = MaterialTheme.typography.bodySmall)
@@ -76,9 +100,17 @@ fun VideoPreferenceSettings() {
         TextButton(onClick = { confirmation = VIDEO_FEED_FILTERS }) { Text("Reset hidden videos and channels") }
     }
     val key = editing
-    if (key != null) AlertDialog(onDismissRequest = { editing = null }, title = { Text(if (key == VIDEO_WIFI_QUALITY) "Wi-Fi video quality" else "Mobile data video quality") }, text = {
+    if (key != null) AlertDialog(onDismissRequest = { editing = null }, title = { Text(if (key == CAR_CONNECTION_PLAYBACK) "Android Auto connection" else if (key == VIDEO_WIFI_QUALITY) "Wi-Fi video quality" else "Mobile data video quality") }, text = {
         Column {
-            listOf("Auto", "1080p", "720p", "360p").forEach { value ->
+            if (key == CAR_CONNECTION_PLAYBACK) {
+                Text("Choose what happens when Android Auto connects to Nothing Player. A song already playing will continue.", style = MaterialTheme.typography.bodySmall)
+                listOf("resume" to "Resume last playback", "paused" to "Don't auto-resume").forEach { (value, label) ->
+                    Row(Modifier.fillMaxWidth().clickable { scope.launch { settings.putString(key, value) }; editing = null }, verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = value == (carPlayback ?: "resume"), onClick = null)
+                        Text(label, Modifier.padding(start = 8.dp))
+                    }
+                }
+            } else listOf("Auto", "1080p", "720p", "360p").forEach { value ->
                 TextButton(onClick = { scope.launch { settings.putString(key, value); settings.putString(VIDEO_QUALITY_OVERRIDE, "") }; editing = null }) { Text(value) }
             }
         }

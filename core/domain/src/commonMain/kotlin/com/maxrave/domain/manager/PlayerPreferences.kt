@@ -17,6 +17,7 @@ const val VIDEO_MOBILE_QUALITY = "video_mobile_quality"
 const val VIDEO_QUALITY_OVERRIDE = "video_quality_override"
 const val CAPTION_LANGUAGE = "video_caption_language"
 const val CAPTION_SIZE = "video_caption_size"
+const val CAR_CONNECTION_PLAYBACK = "car_connection_playback"
 private val videoPreferencesMutex = Mutex()
 
 @Serializable
