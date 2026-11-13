@@ -205,6 +205,24 @@ class SharedViewModel(
     private val _shareSavedLyrics: MutableStateFlow<Boolean> = MutableStateFlow(true)
     val shareSavedLyrics: StateFlow<Boolean> get() = _shareSavedLyrics
 
+    // Playback may already be active in Android Auto. Main.immediate collectors
+    // can run inside init, so all state must exist before subscriptions start.
+    private var _downloadState: MutableStateFlow<DownloadHandler.Download?> = MutableStateFlow(null)
+    var downloadState: StateFlow<DownloadHandler.Download?> = _downloadState.asStateFlow()
+    private var songInfoJob: Job? = null
+    private var lyricsRequestJob: Job? = null
+    private var lyricsRequestId: String? = null
+    private var _recreateActivity: MutableStateFlow<Boolean> = MutableStateFlow(false)
+    val recreateActivity: StateFlow<Boolean> = _recreateActivity
+    private val _reloadDestination: MutableStateFlow<KClass<*>?> = MutableStateFlow(null)
+    val reloadDestination: StateFlow<KClass<*>?> = _reloadDestination.asStateFlow()
+    private var _downloadFileProgress = MutableStateFlow<DownloadProgress>(DownloadProgress.INIT)
+    val downloadFileProgress: StateFlow<DownloadProgress> get() = _downloadFileProgress
+    private val _translatedVoteState = MutableStateFlow<VoteData?>(null)
+    val translatedVoteState: StateFlow<VoteData?> = _translatedVoteState.asStateFlow()
+    private val _lyricsVoteState = MutableStateFlow<VoteData?>(null)
+    val lyricsVoteState: StateFlow<VoteData?> = _lyricsVoteState.asStateFlow()
+
     init {
         viewModelScope.launch {
             log("SharedViewModel init")
@@ -586,9 +604,6 @@ class SharedViewModel(
         mediaPlayerHandler.sleepStop()
     }
 
-    private var _downloadState: MutableStateFlow<DownloadHandler.Download?> = MutableStateFlow(null)
-    var downloadState: StateFlow<DownloadHandler.Download?> = _downloadState.asStateFlow()
-
     fun checkIsRestoring() {
         viewModelScope.launch {
             val downloadedCacheKeys = cacheRepository.getAllCacheKeys(DOWNLOAD_CACHE)
@@ -891,8 +906,6 @@ class SharedViewModel(
         }
     }
 
-    private var songInfoJob: Job? = null
-
     fun getSongInfo(mediaId: String?) {
         songInfoJob?.cancel()
         songInfoJob =
@@ -1153,9 +1166,6 @@ class SharedViewModel(
             }
         }
     }
-
-    private var lyricsRequestJob: Job? = null
-    private var lyricsRequestId: String? = null
 
     private fun getLyricsFromFormat(isVideo: Boolean, song: SongEntity, duration: Int, force: Boolean = false) {
         if (!force && lyricsRequestId == song.videoId && lyricsRequestJob?.isActive == true) return
@@ -1582,9 +1592,6 @@ class SharedViewModel(
         }
     }
 
-    private var _recreateActivity: MutableStateFlow<Boolean> = MutableStateFlow(false)
-    val recreateActivity: StateFlow<Boolean> = _recreateActivity
-
     fun activityRecreate() {
         _recreateActivity.value = true
     }
@@ -1667,9 +1674,6 @@ class SharedViewModel(
         }
     }
 
-    private val _reloadDestination: MutableStateFlow<KClass<*>?> = MutableStateFlow(null)
-    val reloadDestination: StateFlow<KClass<*>?> = _reloadDestination.asStateFlow()
-
     fun reloadDestination(destination: KClass<*>) {
         _reloadDestination.value = destination
     }
@@ -1677,9 +1681,6 @@ class SharedViewModel(
     fun reloadDestinationDone() {
         _reloadDestination.value = null
     }
-
-    private var _downloadFileProgress = MutableStateFlow<DownloadProgress>(DownloadProgress.INIT)
-    val downloadFileProgress: StateFlow<DownloadProgress> get() = _downloadFileProgress
 
     fun downloadFile(bitmap: ImageBitmap) {
         val fileName =
@@ -1740,14 +1741,6 @@ class SharedViewModel(
             it.copy(bitmap = bitmap)
         }
     }
-
-    // Vote state for translated lyrics
-    private val _translatedVoteState = MutableStateFlow<VoteData?>(null)
-    val translatedVoteState: StateFlow<VoteData?> = _translatedVoteState.asStateFlow()
-
-    // Vote state for original lyrics
-    private val _lyricsVoteState = MutableStateFlow<VoteData?>(null)
-    val lyricsVoteState: StateFlow<VoteData?> = _lyricsVoteState.asStateFlow()
 
     /**
      * Vote for Nothing Player original lyrics (upvote or downvote)
