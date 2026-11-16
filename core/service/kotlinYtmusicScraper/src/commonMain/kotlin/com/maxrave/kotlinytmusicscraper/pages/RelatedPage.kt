@@ -211,7 +211,7 @@ data class RelatedPage(
                                 ?.content
                                 ?.musicPlayButtonRenderer
                                 ?.playNavigationEndpoint
-                                ?.watchPlaylistEndpoint ?: return null,
+                                ?.let { it.watchPlaylistEndpoint ?: it.watchEndpoint } ?: return null,
                         // If the playlist is radio, shuffle is not available
                         shuffleEndpoint =
                             renderer.menu
@@ -221,11 +221,11 @@ data class RelatedPage(
                                     it.menuNavigationItemRenderer?.icon?.iconType == "MUSIC_SHUFFLE"
                                 }?.menuNavigationItemRenderer
                                 ?.navigationEndpoint
-                                ?.watchPlaylistEndpoint
+                                ?.let { it.watchPlaylistEndpoint ?: it.watchEndpoint }
                                 ?: renderer.thumbnailOverlay
                                     .musicItemThumbnailOverlayRenderer.content
                                     .musicPlayButtonRenderer.playNavigationEndpoint
-                                    .watchPlaylistEndpoint,
+                                    .let { it.watchPlaylistEndpoint ?: it.watchEndpoint } ?: return null,
                         radioEndpoint =
                             renderer.menu
                                 ?.menuRenderer
@@ -234,11 +234,11 @@ data class RelatedPage(
                                     it.menuNavigationItemRenderer?.icon?.iconType == "MIX"
                                 }?.menuNavigationItemRenderer
                                 ?.navigationEndpoint
-                                ?.watchPlaylistEndpoint
+                                ?.let { it.watchPlaylistEndpoint ?: it.watchEndpoint }
                                 ?: renderer.thumbnailOverlay
                                     .musicItemThumbnailOverlayRenderer.content
                                     .musicPlayButtonRenderer.playNavigationEndpoint
-                                    .watchPlaylistEndpoint,
+                                    .let { it.watchPlaylistEndpoint ?: it.watchEndpoint },
                     )
 
                 renderer.isArtist -> {
