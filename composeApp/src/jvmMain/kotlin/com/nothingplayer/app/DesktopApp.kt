@@ -253,8 +253,12 @@ fun runDesktopApp(args: Array<String> = emptyArray()) {
         val hasTrack = nowPlayingTitle.isNotBlank()
         // Tray menus are narrow, so long titles would stretch the popup.
         val trayLabel: (String) -> String = { if (it.length > 40) it.take(39).trimEnd() + "…" else it }
+        // Use pre-rendered files: the tray library's Painter overload depends on
+        // a Skia encodeToData signature removed by the current Compose runtime.
+        val trayIcons = remember { DesktopTrayIcons.extract() }
         Tray(
-            icon = painterResource(Res.drawable.app_icon),
+            iconPath = trayIcons.pngUri,
+            windowsIconPath = trayIcons.icoUri,
             tooltip =
                 when {
                     hasTrack && nowPlayingArtist.isNotBlank() -> "$nowPlayingTitle — $nowPlayingArtist"

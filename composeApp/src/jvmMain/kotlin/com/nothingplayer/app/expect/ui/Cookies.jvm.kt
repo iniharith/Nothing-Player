@@ -27,12 +27,20 @@ import java.net.URI
 actual fun createWebViewCookieManager(): WebViewCookieManager =
     object : WebViewCookieManager {
         override fun getCookie(url: String): String =
+            if (URI(url).host == "music.youtube.com" && DesktopCapturedCookies.value != null) {
+                DesktopCapturedCookies.value?.header.orEmpty()
+            } else {
             CookieHandler
                 .getDefault()
-                .get(URI(url), emptyMap())["Cookie"]
+                ?.get(URI(url), emptyMap())?.get("Cookie")
                 ?.joinToString("; ") ?: ""
+            }
+
+        override fun getNetscapeCookies(url: String): String? =
+            if (URI(url).host == "music.youtube.com") DesktopCapturedCookies.value?.netscape else null
 
         override fun removeAllCookies() {
+            DesktopCapturedCookies.value = null
             CookieHandler.setDefault(
                 CookieManager(),
             )
@@ -47,6 +55,11 @@ actual fun PlatformWebView(
     aboveContent: @Composable (BoxScope.() -> Unit),
     onPageFinished: (String) -> Unit,
 ) {
+    if (System.getProperty("os.name").contains("Windows", ignoreCase = true) &&
+        URI(initUrl).host in setOf("accounts.google.com", "music.youtube.com")) {
+        DesktopYouTubeLogin(state, aboveContent, onPageFinished)
+        return
+    }
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center

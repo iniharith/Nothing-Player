@@ -8,6 +8,7 @@ import androidx.compose.runtime.remember
 
 interface WebViewCookieManager {
     fun getCookie(url: String): String
+    fun getNetscapeCookies(url: String): String? = null
 
     fun removeAllCookies()
 }

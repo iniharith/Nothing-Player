@@ -1,7 +1,7 @@
 [versions]
 # App version
-version-name = "2.0.17"
-version-code = "75"
+version-name = "2.0.19"
+version-code = "77"
 
 android = "9.2.1"
 kotlin = "2.4.0"
@@ -67,13 +67,13 @@ liquid-glass = "2.0.0"
 liquid-glass-shapes = "1.2.0"
 ffmpeg-kit-audio = "6.0.1"
 composeHotReload = "1.1.1"
-composeMultiplatform = "1.11.1"
+composeMultiplatform = "1.12.2"
 datetime = "0.8.0"
 sqlite = "2.6.2"
 okio = "3.17.0"
-material3-multiplatform = "1.12.0-alpha01" # alpha01 = skiko 0.148.1 (has Matrix33.makeTranslate) to match compottie 1.12 snapshot; alpha02 bumps skiko 0.148.2 which removed it → compottie crash
+material3-multiplatform = "1.12.0-alpha03" # Material3 version listed for Compose Multiplatform 1.12.2 by JetBrains.
 adaptive = "1.2.0"
-componentsResources = "1.11.1"
+componentsResources = "1.12.2"
 compottie = "2.3.0" # Published stable artifact; the Compose 1.12 snapshot is no longer available.
 cmptoast = "1.0.71"
 uri = "0.0.21"

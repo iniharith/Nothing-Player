@@ -143,7 +143,7 @@ fun LoginScreen(
                                 .takeIf {
                                     it.isNotEmpty()
                                 }?.let {
-                                    settingsViewModel.addAccount(it)
+                                    settingsViewModel.addAccount(it, createWebViewCookieManager().getNetscapeCookies(url))
                                 } ?: false
 
                         createWebViewCookieManager().removeAllCookies()

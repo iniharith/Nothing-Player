@@ -143,8 +143,10 @@ tasks.named<hydraulic.conveyor.gradle.WriteConveyorConfigTask>("writeConveyorCon
 
 compose.desktop {
     application {
-        mainClass = "com.maxrave.simpmusic.MainKt"
+        mainClass = "com.nothingplayer.app.MainKt"
         jvmArgs += "--add-opens=java.base/java.nio=ALL-UNNAMED"
+        jvmArgs += "--add-opens=java.desktop/sun.awt=ALL-UNNAMED"
+        jvmArgs += "--add-opens=java.desktop/java.awt.peer=ALL-UNNAMED"
 
         nativeDistributions {
             appResourcesRootDir = rootDir.resolve("mpv-natives/")
@@ -205,6 +207,10 @@ compose.desktop {
             }
             windows {
                 includeAllModules = true
+                perUserInstall = true
+                shortcut = true
+                menu = true
+                menuGroup = "Nothing Player"
                 packageVersion =
                     libs.versions.version.name
                         .get()
