@@ -9,6 +9,13 @@ data class ResponseContext(
     val mainAppWebResponseContext: MainAppWebResponseContext? = null,
     val webResponseContextExtensionData: WebResponseContextExtensionData? = null,
 ) {
+    /** Music browse responses report sign-in state through service tracking on some clients. */
+    val isLoggedOut: Boolean
+        get() = mainAppWebResponseContext?.loggedOut == true ||
+            serviceTrackingParams.orEmpty().any { service ->
+                service.params.any { it.key == "logged_in" && it.value == "0" }
+            }
+
     @Serializable
     data class WebResponseContextExtensionData(
         val ytConfigData: YtConfigData? = null,
@@ -21,6 +28,7 @@ data class ResponseContext(
     @Serializable
     data class MainAppWebResponseContext(
         val datasyncId: String? = null,
+        val loggedOut: Boolean? = null,
     )
     @Serializable
     data class ServiceTrackingParam(

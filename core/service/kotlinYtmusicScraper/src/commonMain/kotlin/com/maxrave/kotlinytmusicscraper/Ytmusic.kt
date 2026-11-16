@@ -25,6 +25,7 @@ import com.maxrave.kotlinytmusicscraper.models.body.SearchBody
 import com.maxrave.kotlinytmusicscraper.models.response.DownloadProgress
 import com.maxrave.kotlinytmusicscraper.models.response.RemoteConfig
 import com.maxrave.kotlinytmusicscraper.utils.parseCookieString
+import com.maxrave.kotlinytmusicscraper.utils.youtubeAuthorization
 import com.maxrave.kotlinytmusicscraper.utils.sha1
 import com.maxrave.ktorext.curl.CurlLogger
 import com.maxrave.ktorext.encoding.brotli
@@ -231,6 +232,7 @@ class Ytmusic {
                 append("X-Goog-Pageid", it)
             }
             val origin = if (client == WEB) "https://www.youtube.com" else "https://music.youtube.com"
+            append("Origin", origin)
             append("x-origin", origin)
             if (client.referer != null && isUsingReferer) {
                 append("Referer", client.referer)
@@ -239,11 +241,8 @@ class Ytmusic {
                 val cookie = customCookie ?: this@Ytmusic.cookie
                 cookie?.let { cookie ->
                     append("Cookie", cookie)
-                    if ("SAPISID" !in cookieMap && "__Secure-3PAPISID" !in cookieMap) return@let
                     val currentTime = now().toInstant(TimeZone.currentSystemDefault()).epochSeconds
-                    val sapisidCookie = cookieMap["SAPISID"] ?: cookieMap["__Secure-3PAPISID"]
-                    val sapisidHash = sha1("$currentTime $sapisidCookie $origin")
-                    append("Authorization", "SAPISIDHASH ${currentTime}_$sapisidHash")
+                    youtubeAuthorization(cookie, origin, currentTime)?.let { append("Authorization", it) }
                 }
             }
         }
@@ -253,14 +252,7 @@ class Ytmusic {
 
     @OptIn(ExperimentalTime::class)
     internal fun getAuthorizationHeader(): String? =
-        cookie?.let { cookie ->
-            val origin = "https://music.youtube.com"
-            if ("SAPISID" !in cookieMap || "__Secure-3PAPISID" !in cookieMap) null
-            val currentTime = now().toInstant(TimeZone.currentSystemDefault()).epochSeconds
-            val sapisidCookie = cookieMap["SAPISID"] ?: cookieMap["__Secure-3PAPISID"]
-            val sapisidHash = sha1("$currentTime $sapisidCookie $origin")
-            "SAPISIDHASH ${currentTime}_$sapisidHash"
-        }
+        youtubeAuthorization(cookie, "https://music.youtube.com", now().toInstant(TimeZone.currentSystemDefault()).epochSeconds)
 
     fun regularVideoPlayer(videoId: String) = extractor.regularVideoPlayer(videoId)
 

@@ -6,6 +6,7 @@ import com.maxrave.common.SUPPORTED_LANGUAGE
 import com.maxrave.domain.data.entities.SongEntity
 import com.maxrave.domain.data.model.home.HomeDataCombine
 import com.maxrave.domain.data.model.home.HomeItem
+import com.maxrave.domain.data.model.home.appendHomeSections
 import com.maxrave.domain.data.model.home.chart.Chart
 import com.maxrave.domain.data.model.mood.Mood
 import com.maxrave.domain.manager.DataStoreManager
@@ -54,6 +55,9 @@ class HomeViewModel(
     val accountInfo: StateFlow<Pair<String?, String?>?> = _accountInfo
 
     private var homeJob: Job? = null
+    private var homePaginationJob: Job? = null
+    private val requestedHomeContinuations = mutableSetOf<String>()
+    private var homeGeneration = 0
 
     /** Guards the single silent auto-retry per manual load (see [getHomeItemList]). */
     private var homeAutoRetried = false
@@ -186,6 +190,9 @@ class HomeViewModel(
         params: String? = null,
         isAutoRetry: Boolean = false,
     ) {
+        homeGeneration++
+        homePaginationJob?.cancel()
+        requestedHomeContinuations.clear()
         loading.value = true
         _homeListState.value = ListState.LOADING
         if (!isAutoRetry) {
@@ -201,6 +208,7 @@ class HomeViewModel(
         homeJob?.cancel()
         homeJob =
             viewModelScope.launch {
+                var homeApplied = false
                 combine(
                     homeRepository.getHomeData(
                         params,
@@ -221,26 +229,29 @@ class HomeViewModel(
                     val exploreMoodItem = result.mood
                     val chart = result.chart
                     val newRelease = result.newRelease
-                    when (home) {
-                        is Resource.Success -> {
-                            _continuation.value = home.data?.first
-                            _homeItemList.value = home.data?.second ?: listOf()
-                        }
+                    if (!homeApplied) {
+                        homeApplied = true
+                        when (home) {
+                            is Resource.Success -> {
+                                _continuation.value = home.data?.first
+                                _homeItemList.value = emptyList<HomeItem>().appendHomeSections(home.data?.second.orEmpty())
+                            }
 
-                        else -> {
-                            _continuation.value = null
-                            // Keep whatever is already on screen. Wiping the list on any error
-                            // (expired cookie, one flaky request) used to flip Home into the
-                            // "No internet" state mid-session even with a live connection.
-                            if (_homeItemList.value.isEmpty()) {
-                                _homeItemList.value = listOf()
+                            else -> {
+                                _continuation.value = null
+                                // Keep whatever is already on screen. Wiping the list on any error
+                                // (expired cookie, one flaky request) used to flip Home into the
+                                // "No internet" state mid-session even with a live connection.
+                                if (_homeItemList.value.isEmpty()) {
+                                    _homeItemList.value = listOf()
+                                }
                             }
                         }
-                    }
-                    if (continuation.value.isNullOrEmpty()) {
-                        _homeListState.value = ListState.PAGINATION_EXHAUST
-                    } else {
-                        _homeListState.value = ListState.IDLE
+                        if (continuation.value.isNullOrEmpty()) {
+                            _homeListState.value = ListState.PAGINATION_EXHAUST
+                        } else {
+                            _homeListState.value = ListState.IDLE
+                        }
                     }
                     when (chart) {
                         is Resource.Success -> {
@@ -308,7 +319,12 @@ class HomeViewModel(
     }
 
     fun getContinueHomeItem(continuation: String?) {
-        viewModelScope.launch {
+        if (continuation.isNullOrEmpty() || continuation != _continuation.value ||
+            _homeListState.value != ListState.IDLE ||
+            !requestedHomeContinuations.add(continuation)) return
+        val generation = homeGeneration
+        _homeListState.value = ListState.PAGINATING
+        homePaginationJob = viewModelScope.launch {
             if (continuation.isNullOrEmpty()) {
                 _homeListState.value = ListState.PAGINATION_EXHAUST
                 return@launch
@@ -321,12 +337,13 @@ class HomeViewModel(
                         getString(Res.string.view_count),
                         getString(Res.string.song),
                     ).collect { home ->
+                        if (generation != homeGeneration) return@collect
                         when (home) {
                             is Resource.Success -> {
-                                _continuation.value = home.data?.first
+                                _continuation.value = home.data?.first?.takeUnless { it in requestedHomeContinuations }
                                 val newItems = home.data?.second ?: listOf()
-                                _homeItemList.update { it + newItems }
-                                if (home.data?.first.isNullOrEmpty()) {
+                                _homeItemList.update { it.appendHomeSections(newItems) }
+                                if (_continuation.value.isNullOrEmpty()) {
                                     _homeListState.value = ListState.PAGINATION_EXHAUST
                                 } else {
                                     _homeListState.value = ListState.IDLE

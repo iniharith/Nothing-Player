@@ -31,6 +31,7 @@ import com.maxrave.domain.manager.CAR_CONNECTION_PLAYBACK
 import com.maxrave.domain.mediaservice.handler.MediaPlayerHandler
 import com.maxrave.domain.mediaservice.handler.PlayerEvent
 import com.maxrave.domain.mediaservice.handler.PlaylistType
+import com.maxrave.domain.data.model.home.appendHomeSections
 import com.maxrave.domain.mediaservice.handler.QueueData
 import com.maxrave.domain.repository.HomeRepository
 import com.maxrave.domain.repository.LocalPlaylistRepository
@@ -543,7 +544,8 @@ internal class SimpleMediaSessionCallback(
                             // Cap the continuation crawl: fetching every home shelf before
                             // replying made browsing on the head unit hang for many seconds.
                             var pages = 0
-                            while (continueParam != null && pages < HOME_MAX_CONTINUATIONS) {
+                            val requestedContinuations = mutableSetOf<String>()
+                            while (continueParam != null && pages < HOME_MAX_CONTINUATIONS && requestedContinuations.add(continueParam)) {
                                 homeRepository
                                     .getHomeDataContinue(
                                         continueParam,
@@ -557,6 +559,9 @@ internal class SimpleMediaSessionCallback(
                                 pages++
                             }
                         }
+                        val uniqueHome = emptyList<com.maxrave.domain.data.model.home.HomeItem>().appendHomeSections(listHomeItem)
+                        listHomeItem.clear()
+                        listHomeItem.addAll(uniqueHome)
                         listHomeItem.map {
                             browsableMediaItem(
                                 "$HOME/${it.title}",

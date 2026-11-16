@@ -350,7 +350,7 @@ fun HomeScreen(
             }
         }
 
-    LaunchedEffect(key1 = shouldStartPaginate.value) {
+    LaunchedEffect(shouldStartPaginate.value, homeListState, continuation) {
         Logger.d("HomeScreen", "shouldStartPaginate: ${shouldStartPaginate.value}")
         Logger.d("HomeScreen", "homeListState: $homeListState")
         Logger.d("HomeScreen", "Continuation: $continuation")
@@ -498,35 +498,12 @@ fun HomeScreen(
                         return@Crossfade
                     }
                     val quickPicksTitle = stringResource(Res.string.quick_picks)
-                    val quickPicksContent =
-                        remember(homeData, quickPicksTitle) {
-                            homeData
-                                .find { it.title == quickPicksTitle }
-                                ?.let { content ->
-                                    content.copy(
-                                        contents =
-                                            content.contents.mapNotNull { ct ->
-                                                ct?.copy(
-                                                    artists =
-                                                        ct.artists?.let { art ->
-                                                            if (art.size > 1) {
-                                                                art.dropLast(1)
-                                                            } else {
-                                                                art
-                                                            }
-                                                        },
-                                                )
-                                            },
-                                    )
-                                }
-                        }
                     LazyColumn(
                         state = scrollState,
                         verticalArrangement = Arrangement.spacedBy(28.dp),
                     ) {
-                        // Key by shelf title, not index: a pull-to-refresh that reorders shelves
-                    // then reuses state per shelf instead of recomposing every row.
-                    itemsIndexed(homeData, key = { _, item -> "home_${item.title}" }) { index, item ->
+                        // Different shelves may share a title. Each must have its own row state.
+                        itemsIndexed(homeData, key = { index, item -> "home_${item.title}_$index" }) { index, item ->
                             Box {
                                 if (index == 0) {
                                     Box(
@@ -567,17 +544,11 @@ fun HomeScreen(
                                         Spacer(Modifier.height(8.dp))
                                     }
                                     if (item.title == quickPicksTitle) {
-                                        AnimatedVisibility(
-                                            visible = quickPicksContent != null,
-                                        ) {
-                                            quickPicksContent?.let { content ->
-                                                QuickPicks(
-                                                    homeItem = content,
-                                                    navController = navController,
-                                                    viewModel = viewModel,
-                                                )
-                                            }
-                                        }
+                                        QuickPicks(
+                                            homeItem = item,
+                                            navController = navController,
+                                            viewModel = viewModel,
+                                        )
                                     } else {
                                         HomeItem(
                                             navController = navController,

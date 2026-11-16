@@ -59,6 +59,26 @@ internal class HomeRepositoryImpl(
             ignoreUnknownKeys = true
         }
 
+    // Account observers are asynchronous, including on a cold Android Auto start.
+    // Read the selected account before requesting personalized Home content.
+    private suspend fun queryHome(params: String? = null, continuation: String? = null) = runCatching {
+        val cookie = dataStoreManager.cookie.first()
+        check(cookie.isNotBlank() || dataStoreManager.loggedIn.first() != DataStoreManager.TRUE) {
+            "Sign in again in Settings to restore your YouTube Home recommendations."
+        }
+        if (youTube.cookie.orEmpty() != cookie) youTube.cookie = cookie.ifBlank { null }
+        youTube.pageId = dataStoreManager.pageId.first().ifBlank { null }
+        val response = youTube.customQuery(
+            browseId = if (continuation == null) "FEmusic_home" else null,
+            params = params,
+            continuation = continuation,
+        ).getOrThrow()
+        check(cookie.isBlank() || !response.responseContext.isLoggedOut) {
+            "Your YouTube session expired. Sign in again in Settings to restore personal Home recommendations."
+        }
+        response
+    }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
+
     override fun getHomeData(
         params: String?,
         viewString: String,
@@ -67,8 +87,7 @@ internal class HomeRepositoryImpl(
         flow {
             runCatching {
                 val limit = dataStoreManager.homeLimit.first()
-                youTube
-                    .customQuery(browseId = "FEmusic_home", params = params)
+                queryHome(params = params)
                     .onSuccess { result ->
                         val list: ArrayList<HomeItem> = arrayListOf()
                         if (result.contents
@@ -205,6 +224,9 @@ internal class HomeRepositoryImpl(
                     }.onFailure { error ->
                         emit(Resource.Error<Pair<String?, List<HomeItem>>>(error.message.toString()))
                     }
+            }.onFailure { error ->
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                emit(Resource.Error<Pair<String?, List<HomeItem>>>(error.message ?: "Could not load YouTube Home"))
             }
         }.flowOn(Dispatchers.IO)
 
@@ -213,8 +235,7 @@ internal class HomeRepositoryImpl(
         viewString: String,
         songString: String
     ): Flow<Resource<Pair<String?, List<HomeItem>>>> = flow {
-        youTube
-            .customQuery(browseId = "", continuation = continueParam)
+        queryHome(continuation = continueParam)
             .onSuccess { response ->
                 val newContinueParam =
                     response.continuationContents

@@ -13,12 +13,20 @@ fun sha1(str: String): String = MessageDigest.getInstance("SHA-1").digest(str.to
 
 fun parseCookieString(cookie: String): Map<String, String> =
     cookie
-        .split("; ")
-        .filter { it.isNotEmpty() }
-        .associate {
-            val (key, value) = it.split("=")
-            key to value
-        }
+        .split(';')
+        .mapNotNull {
+            val part = it.trim()
+            val separator = part.indexOf('=')
+            if (separator <= 0) null
+            else part.substring(0, separator).trim() to part.substring(separator + 1)
+        }.toMap()
+
+internal fun youtubeAuthorization(cookie: String?, origin: String, epochSeconds: Long): String? {
+    val cookies = parseCookieString(cookie.orEmpty())
+    val sapisid = sequenceOf("SAPISID", "__Secure-3PAPISID", "__Secure-1PAPISID")
+        .mapNotNull { cookies[it]?.takeIf(String::isNotBlank) }.firstOrNull() ?: return null
+    return "SAPISIDHASH ${epochSeconds}_${sha1("$epochSeconds $sapisid $origin")}"
+}
 
 fun String.parseTime(): Int? {
     try {
